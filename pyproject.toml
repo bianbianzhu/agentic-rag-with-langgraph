@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "A production-oriented Agentic RAG Reference System built with LangGraph."
 requires-python = ">=3.11"
 dependencies = [
-    "langchain[openai]>=1.0.0",
     "langgraph>=1.0.0",
     "pydantic>=2.10.0",
 ]

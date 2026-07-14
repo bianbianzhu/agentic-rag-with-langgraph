@@ -4,6 +4,12 @@
 
 The Reference System now has one installable Python package, one compiled LangGraph export, typed mutable State, typed trusted Runtime Context, and a credential-free local development loop. This chapter deliberately answers no knowledge question yet; it proves the application boundary that every later tracer bullet will extend.
 
+## Northstar Labs use case
+
+Northstar Labs is building an internal Engineering Knowledge Assistant over two bounded Knowledge Sources: Engineering Docs and Operational Runbooks. A payments engineer such as Alice should eventually be able to ask, “Why did the payments rollback fail?”, continue with a follow-up question in the same Conversation Thread, and receive an answer supported by currently authorized Evidence. Bob and Carol may have different Access Scopes, so relevant content is not automatically allowed content.
+
+That final behavior does not belong in the first tracer bullet. Chapter 01 establishes where Alice's Untrusted Content, trusted Principal identifier, checkpointed Thread data, and future answer will travel without letting the user message choose authority.
+
 ## The first trust boundary
 
 `GraphState` is checkpointable application data. The Agent Server may receive it as JSON, so the graph validates nested state contracts before using them. `RuntimeContext` is immutable trusted input for one run. The current Principal identifier enters through Runtime Context, never through the user message or checkpointed State.
@@ -29,7 +35,7 @@ The Chapter 01 graph has one deterministic node. It increments the minimal Threa
 - `src/agentic_rag/conversation.py` owns the minimal Thread State.
 - `src/agentic_rag/graph/` owns Graph State, the node adapter, and the compiled `graph` export.
 - `langgraph.json` registers that export as `engineering_assistant`.
-- `.env.example` documents names without supplying secrets. Core Chapter 01 execution uses `LANGSMITH_TRACING=false` and needs no API key.
+- `.env.example` supplies only non-secret local tracing defaults. Core Chapter 01 execution uses `LANGSMITH_TRACING=false` and needs no API key.
 - `tests/unit/` observes only the Runtime Context and compiled-graph seams.
 
 ## Run the loop
@@ -37,6 +43,7 @@ The Chapter 01 graph has one deterministic node. It increments the minimal Threa
 Install the locked environment and run the deterministic checks:
 
 ```bash
+cp .env.example .env
 uv sync --group dev
 uv run pytest -q
 uv run pyright

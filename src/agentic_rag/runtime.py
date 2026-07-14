@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class RuntimeContext:
-    """Immutable trusted identity for the current run."""
+    """Immutable trusted Principal identifier for the current run."""
 
     principal_id: str
 

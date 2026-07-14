@@ -24,12 +24,12 @@ def test_graph_completes_deterministic_turn() -> None:
     )
 
     assert result == {
-        "thread": ThreadState(completed_turns=1),
-        "current_turn": CurrentTurnWork(
-            user_message="Start the reference system",
-            assistant_message="The Reference System development loop is ready.",
-            status="answered",
-        ),
+        "thread": {"completed_turns": 1},
+        "current_turn": {
+            "user_message": "Start the reference system",
+            "assistant_message": "The Reference System development loop is ready.",
+            "status": "answered",
+        },
     }
 
 
@@ -42,9 +42,29 @@ def test_graph_accepts_json_shaped_agent_server_input() -> None:
         context=RuntimeContext(principal_id="alice"),
     )
 
-    assert result["thread"] == ThreadState(completed_turns=1)
-    assert result["current_turn"] == CurrentTurnWork(
-        user_message="Start the reference system",
-        assistant_message="The Reference System development loop is ready.",
-        status="answered",
+    assert result["thread"] == {"completed_turns": 1}
+    assert result["current_turn"] == {
+        "user_message": "Start the reference system",
+        "assistant_message": "The Reference System development loop is ready.",
+        "status": "answered",
+    }
+
+
+def test_graph_reuses_json_safe_thread_state_for_next_turn() -> None:
+    first_result = graph.invoke(
+        {
+            "thread": {"completed_turns": 0},
+            "current_turn": {"user_message": "First Turn"},
+        },
+        context=RuntimeContext(principal_id="alice"),
     )
+
+    second_result = graph.invoke(
+        {
+            "thread": first_result["thread"],
+            "current_turn": {"user_message": "Second Turn"},
+        },
+        context=RuntimeContext(principal_id="alice"),
+    )
+
+    assert second_result["thread"] == {"completed_turns": 2}
