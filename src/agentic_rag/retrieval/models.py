@@ -1,8 +1,8 @@
 """Contracts owned by authorized hybrid retrieval."""
 
+from collections.abc import Callable
 from enum import StrEnum
-from typing import Annotated, Self
-from typing import Literal
+from typing import Annotated, Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -36,7 +36,7 @@ class RetrievalRequest(BaseModel):
     )
     dense_candidate_limit: int = Field(ge=1, le=50)
     lexical_candidate_limit: int = Field(ge=1, le=50)
-    result_limit: int = Field(ge=1, le=20)
+    result_limit: int = Field(ge=1, le=8)
 
     @model_validator(mode="after")
     def require_distinct_knowledge_sources(self) -> Self:
@@ -80,7 +80,40 @@ class EvidenceItem(BaseModel):
     source_path: NonEmptyText
     title: NonEmptyText
     source_locator: SourceLocator
-    provenance: RetrievalProvenance
+    provenance: tuple[RetrievalProvenance, ...] = Field(min_length=1)
+
+
+class RerankCandidate(BaseModel):
+    """Bounded authorized candidate exposed to the listwise reranker."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    chunk_id: NonEmptyText
+    content: NonEmptyText
+    title: NonEmptyText
+    source_path: NonEmptyText
+
+
+class RerankItem(BaseModel):
+    """One candidate in the reranker's ordered structured output."""
+
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, allow_inf_nan=False
+    )
+
+    chunk_id: NonEmptyText
+    score: float = Field(ge=0, le=1)
+
+
+class RerankOutput(BaseModel):
+    """Complete ordered reranking of the supplied candidates."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    items: tuple[RerankItem, ...] = Field(min_length=1, max_length=50)
+
+
+Reranker = Callable[[str, tuple[RerankCandidate, ...]], RerankOutput]
 
 
 class RetrievalStatus(StrEnum):
@@ -98,21 +131,24 @@ class RetrievalStage(StrEnum):
     EMBEDDING = "embedding"
     DENSE = "dense"
     LEXICAL = "lexical"
+    RERANK = "rerank"
+    CONTEXT = "context"
     CORPUS = "corpus"
 
 
 class RetrievalErrorCode(StrEnum):
-    """Chapter 04 subset of the fixed retrieval error taxonomy."""
+    """Structured errors currently emitted by retrieval."""
 
     AUTHORIZATION_CONTEXT_MISSING = "authorization_context_missing"
     EMBEDDING_FAILED = "embedding_failed"
     DENSE_FAILED = "dense_failed"
     LEXICAL_FAILED = "lexical_failed"
+    RERANK_FAILED = "rerank_failed"
     CORPUS_UNAVAILABLE = "corpus_unavailable"
 
 
 class RetrievalConfig(BaseModel):
-    """Versioned non-secret configuration for hybrid fusion."""
+    """Versioned non-secret configuration for retrieval and reranking."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -123,6 +159,18 @@ class RetrievalConfig(BaseModel):
         "english-websearch-v1"
     )
     rrf_k: int = Field(default=60, ge=1, le=1_000)
+    fusion_candidate_limit: int = Field(default=50, ge=1, le=50)
+    rerank_candidate_limit: int = Field(default=20, ge=1, le=50)
+    reranker_model: Literal["openai:gpt-5.4-nano-2026-03-17"] = (
+        "openai:gpt-5.4-nano-2026-03-17"
+    )
+    reranker_prompt_version: Literal["listwise-v1"] = "listwise-v1"
+    relevance_threshold: float = Field(default=0.5, ge=0, le=1)
+    context_window: int = Field(default=1, ge=0, le=3)
+    evidence_token_limit: int = Field(default=6_000, ge=1, le=6_000)
+    token_counting_semantics: Literal["chars-div-4-v1"] = (
+        "chars-div-4-v1"
+    )
 
 
 class CandidateCounts(BaseModel):
@@ -133,7 +181,7 @@ class CandidateCounts(BaseModel):
     dense: int = Field(ge=0)
     lexical: int = Field(ge=0)
     deduplicated: int = Field(ge=0)
-    reranked: int | None = Field(default=None, ge=0)
+    reranked: int = Field(ge=0)
     returned: int = Field(ge=0)
 
 
@@ -148,6 +196,7 @@ class RetrievalTimings(BaseModel):
     dense_ms: float = Field(ge=0)
     lexical_ms: float = Field(ge=0)
     fusion_ms: float = Field(ge=0)
+    rerank_ms: float = Field(ge=0)
     total_ms: float = Field(ge=0)
 
 
@@ -225,14 +274,83 @@ class RetrievalResult(BaseModel):
             raise ValueError("Retrieval status and failure fields disagree")
         if self.candidate_counts.returned != len(self.evidence_items):
             raise ValueError("returned count must match Evidence Items")
-        if (
-            self.status is RetrievalStatus.NO_EVIDENCE
-            and self.candidate_counts.deduplicated != 0
-        ):
-            raise ValueError("no_evidence cannot contain candidates")
+        if self.status is RetrievalStatus.FAILED and self.evidence_items:
+            raise ValueError("failed retrieval cannot expose Evidence Items")
         if (
             self.status is RetrievalStatus.COMPLETED
         ) != bool(self.evidence_items):
             if self.status is not RetrievalStatus.FAILED:
                 raise ValueError("completed status must match Evidence Items")
+        return self
+
+
+class EvidenceSetRequestOutcome(BaseModel):
+    """Status retained for one required Retrieval Request."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    request_id: NonEmptyText
+    retrieval_config_fingerprint: str = Field(
+        pattern=r"^retrieval_[0-9a-f]{64}$"
+    )
+    status: RetrievalStatus
+    failed_stage: RetrievalStage | None = None
+    error_code: RetrievalErrorCode | None = None
+
+    @model_validator(mode="after")
+    def require_consistent_status(self) -> Self:
+        has_failure = self.failed_stage is not None and self.error_code is not None
+        if (self.failed_stage is None) != (self.error_code is None) or (
+            (self.status is RetrievalStatus.FAILED) != has_failure
+        ):
+            raise ValueError("Evidence Set request status is inconsistent")
+        return self
+
+
+class EvidenceSetBudget(BaseModel):
+    """Hard per-answer Evidence Set limits."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    item_limit: int = Field(default=8, ge=1, le=8)
+    token_limit: int = Field(default=6_000, ge=1, le=6_000)
+
+
+class EvidenceSet(BaseModel):
+    """Bounded authorized evidence assembled across required requests."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    evidence_items: tuple[EvidenceItem, ...] = Field(max_length=8)
+    request_outcomes: tuple[EvidenceSetRequestOutcome, ...]
+    budget: EvidenceSetBudget
+    evidence_config_fingerprint: str = Field(
+        pattern=r"^evidence_[0-9a-f]{64}$"
+    )
+    complete: bool
+    token_count: int = Field(ge=0, le=6_000)
+    item_budget_exhausted: bool
+    token_budget_exhausted: bool
+    context_expanded: bool
+    context_ms: float = Field(ge=0)
+    failed_stage: RetrievalStage | None = None
+    error_code: RetrievalErrorCode | None = None
+
+    @model_validator(mode="after")
+    def require_consistent_completeness(self) -> Self:
+        has_failure = self.failed_stage is not None and self.error_code is not None
+        if (self.failed_stage is None) != (self.error_code is None):
+            raise ValueError("Evidence Set failure fields disagree")
+        expected = not has_failure and all(
+            outcome.status is not RetrievalStatus.FAILED
+            for outcome in self.request_outcomes
+        )
+        if self.complete != expected:
+            raise ValueError("Evidence Set completeness disagrees with outcomes")
+        if has_failure and self.evidence_items:
+            raise ValueError("failed Evidence Set cannot expose Evidence Items")
+        if self.token_count > self.budget.token_limit:
+            raise ValueError("Evidence Set exceeds its token budget")
+        if len(self.evidence_items) > self.budget.item_limit:
+            raise ValueError("Evidence Set exceeds its item budget")
         return self

@@ -23,6 +23,8 @@ from agentic_rag.retrieval.models import (
     CandidateCounts,
     EvidenceItem,
     KnowledgeSourceRetrievalOutcome,
+    RerankCandidate,
+    Reranker,
     RetrievalConfig,
     RetrievalErrorCode,
     RetrievalProvenance,
@@ -32,6 +34,7 @@ from agentic_rag.retrieval.models import (
     RetrievalStatus,
     RetrievalTimings,
 )
+from agentic_rag.retrieval.evidence import count_evidence_tokens
 
 
 @dataclass
@@ -52,6 +55,8 @@ class _Candidate:
     lexical_score: float | None = None
     fused_rank: int = 0
     fused_score: float = 0.0
+    rerank_rank: int | None = None
+    rerank_score: float | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +65,7 @@ class _SourceSearch:
     corpus_revision: CorpusRevision | None
     status: RetrievalStatus
     candidates: tuple[_Candidate, ...]
+    deduplicated_count: int
     dense_count: int
     lexical_count: int
     dense_ms: float
@@ -76,6 +82,7 @@ def retrieve(
     request: RetrievalRequest,
     config: RetrievalConfig,
     embedder: Embeddings,
+    reranker: Reranker,
 ) -> RetrievalResult:
     """Execute one bounded Retrieval Request under trusted authority."""
 
@@ -139,14 +146,7 @@ def retrieve(
             candidate.knowledge_source.value,
             candidate.chunk_id,
         ),
-    )
-    selected = tuple(candidates[: request.result_limit])
-    selected_counts = {
-        source: sum(
-            candidate.knowledge_source is source for candidate in selected
-        )
-        for source in request.knowledge_sources
-    }
+    )[: config.rerank_candidate_limit]
     failed_search = next(
         (
             search
@@ -155,10 +155,93 @@ def retrieve(
         ),
         None,
     )
+    if failed_search is not None:
+        return _failed_search_result(
+            request,
+            snapshot,
+            config,
+            started,
+            embedding_ms,
+            searches,
+            failed_search.failed_stage,
+            failed_search.error_code,
+        )
+
+    rerank_ms = 0.0
+    if candidates:
+        rerank_started = perf_counter()
+        try:
+            rerank_output = reranker(
+                request.query,
+                tuple(
+                    RerankCandidate(
+                        chunk_id=candidate.chunk_id,
+                        content=candidate.content,
+                        title=candidate.title,
+                        source_path=candidate.source_path,
+                    )
+                    for candidate in candidates
+                ),
+            )
+            ordered_ids = [item.chunk_id for item in rerank_output.items]
+            candidate_ids = [candidate.chunk_id for candidate in candidates]
+            if (
+                len(ordered_ids) != len(candidate_ids)
+                or len(set(ordered_ids)) != len(ordered_ids)
+                or set(ordered_ids) != set(candidate_ids)
+                or any(
+                    left.score < right.score
+                    for left, right in zip(
+                        rerank_output.items, rerank_output.items[1:]
+                    )
+                )
+            ):
+                raise ValueError("reranker output is not a full permutation")
+        except Exception:
+            return _failed_search_result(
+                request,
+                snapshot,
+                config,
+                started,
+                embedding_ms,
+                searches,
+                RetrievalStage.RERANK,
+                RetrievalErrorCode.RERANK_FAILED,
+                rerank_ms=_elapsed_ms(rerank_started),
+            )
+        rerank_ms = _elapsed_ms(rerank_started)
+        by_id = {candidate.chunk_id: candidate for candidate in candidates}
+        candidates = []
+        for rank, item in enumerate(rerank_output.items, start=1):
+            candidate = by_id[item.chunk_id]
+            candidate.rerank_rank = rank
+            candidate.rerank_score = item.score
+            candidates.append(candidate)
+
+    selected_candidates: list[_Candidate] = []
+    selected_token_count = 0
+    for candidate in candidates:
+        if candidate.rerank_score is None or (
+            candidate.rerank_score < config.relevance_threshold
+        ):
+            continue
+        token_count = count_evidence_tokens(candidate.content)
+        if selected_token_count + token_count > config.evidence_token_limit:
+            continue
+        selected_candidates.append(candidate)
+        selected_token_count += token_count
+        if len(selected_candidates) == request.result_limit:
+            break
+
+    selected = tuple(selected_candidates)
+    selected_counts = {
+        source: sum(
+            candidate.knowledge_source is source for candidate in selected
+        )
+        for source in request.knowledge_sources
+    }
     status = (
-        RetrievalStatus.FAILED
-        if failed_search is not None
-        else RetrievalStatus.COMPLETED
+        RetrievalStatus.COMPLETED
         if selected
         else RetrievalStatus.NO_EVIDENCE
     )
@@ -179,8 +262,10 @@ def retrieve(
         candidate_counts=CandidateCounts(
             dense=sum(search.dense_count for search in searches),
             lexical=sum(search.lexical_count for search in searches),
-            deduplicated=sum(len(search.candidates) for search in searches),
-            reranked=None,
+            deduplicated=sum(
+                search.deduplicated_count for search in searches
+            ),
+            reranked=len(candidates),
             returned=len(selected),
         ),
         timings=RetrievalTimings(
@@ -188,6 +273,7 @@ def retrieve(
             dense_ms=sum(search.dense_ms for search in searches),
             lexical_ms=sum(search.lexical_ms for search in searches),
             fusion_ms=sum(search.fusion_ms for search in searches),
+            rerank_ms=rerank_ms,
             total_ms=_elapsed_ms(started),
         ),
         evidence_items=tuple(
@@ -195,12 +281,19 @@ def retrieve(
             for candidate in selected
         ),
         source_outcomes=tuple(
-            _source_outcome(search, selected_counts[search.knowledge_source])
+            _source_outcome(
+                search,
+                sum(
+                    candidate.knowledge_source is search.knowledge_source
+                    for candidate in candidates
+                ),
+                selected_counts[search.knowledge_source],
+            )
             for search in searches
         ),
         status=status,
-        failed_stage=(failed_search.failed_stage if failed_search else None),
-        error_code=(failed_search.error_code if failed_search else None),
+        failed_stage=None,
+        error_code=None,
     )
 
 
@@ -279,9 +372,10 @@ def _retrieve_knowledge_source(
         )
 
     fusion_started = perf_counter()
-    candidates = _fuse_candidates(
+    fused_candidates = _fuse_candidates(
         dense_candidates, lexical_candidates, config.rrf_k
     )
+    candidates = fused_candidates[: config.fusion_candidate_limit]
     fusion_ms = _elapsed_ms(fusion_started)
     return _SourceSearch(
         knowledge_source=knowledge_source,
@@ -292,6 +386,7 @@ def _retrieve_knowledge_source(
             else RetrievalStatus.NO_EVIDENCE
         ),
         candidates=candidates,
+        deduplicated_count=len(fused_candidates),
         dense_count=dense_count,
         lexical_count=lexical_count,
         dense_ms=dense_ms,
@@ -485,20 +580,24 @@ def _evidence_item(
         source_path=candidate.source_path,
         title=candidate.title,
         source_locator=SourceLocator(section_path=candidate.heading_path),
-        provenance=RetrievalProvenance(
-            retrieval_request_id=request_id,
-            dense_rank=candidate.dense_rank,
-            dense_score=candidate.dense_score,
-            lexical_rank=candidate.lexical_rank,
-            lexical_score=candidate.lexical_score,
-            fused_rank=candidate.fused_rank,
-            fused_score=candidate.fused_score,
+        provenance=(
+            RetrievalProvenance(
+                retrieval_request_id=request_id,
+                dense_rank=candidate.dense_rank,
+                dense_score=candidate.dense_score,
+                lexical_rank=candidate.lexical_rank,
+                lexical_score=candidate.lexical_score,
+                fused_rank=candidate.fused_rank,
+                fused_score=candidate.fused_score,
+                rerank_rank=candidate.rerank_rank,
+                rerank_score=candidate.rerank_score,
+            ),
         ),
     )
 
 
 def _source_outcome(
-    search: _SourceSearch, returned_count: int
+    search: _SourceSearch, reranked_count: int, returned_count: int
 ) -> KnowledgeSourceRetrievalOutcome:
     return KnowledgeSourceRetrievalOutcome(
         knowledge_source=search.knowledge_source,
@@ -507,8 +606,8 @@ def _source_outcome(
         candidate_counts=CandidateCounts(
             dense=search.dense_count,
             lexical=search.lexical_count,
-            deduplicated=len(search.candidates),
-            reranked=None,
+            deduplicated=search.deduplicated_count,
+            reranked=reranked_count,
             returned=returned_count,
         ),
         timings=RetrievalTimings(
@@ -516,6 +615,7 @@ def _source_outcome(
             dense_ms=search.dense_ms,
             lexical_ms=search.lexical_ms,
             fusion_ms=search.fusion_ms,
+            rerank_ms=0,
             total_ms=search.total_ms,
         ),
         failed_stage=search.failed_stage,
@@ -540,6 +640,7 @@ def _failed_source_search(
         corpus_revision=corpus_revision,
         status=RetrievalStatus.FAILED,
         candidates=(),
+        deduplicated_count=0,
         dense_count=dense_count,
         lexical_count=lexical_count,
         dense_ms=dense_ms,
@@ -575,7 +676,7 @@ def _failed_result(
             dense=0,
             lexical=0,
             deduplicated=0,
-            reranked=None,
+            reranked=0,
             returned=0,
         ),
         timings=RetrievalTimings(
@@ -583,10 +684,66 @@ def _failed_result(
             dense_ms=0,
             lexical_ms=0,
             fusion_ms=0,
+            rerank_ms=0,
             total_ms=_elapsed_ms(started),
         ),
         evidence_items=(),
         source_outcomes=(),
+        status=RetrievalStatus.FAILED,
+        failed_stage=failed_stage,
+        error_code=error_code,
+    )
+
+
+def _failed_search_result(
+    request: RetrievalRequest,
+    snapshot: AuthorizationSnapshot,
+    config: RetrievalConfig,
+    started: float,
+    embedding_ms: float,
+    searches: tuple[_SourceSearch, ...],
+    failed_stage: RetrievalStage | None,
+    error_code: RetrievalErrorCode | None,
+    *,
+    rerank_ms: float = 0,
+) -> RetrievalResult:
+    if failed_stage is None or error_code is None:
+        raise ValueError("failed search requires a stage and error code")
+    return RetrievalResult(
+        retrieval_contract_version=config.contract_version,
+        retrieval_config_fingerprint=_retrieval_config_fingerprint(
+            request, config
+        ),
+        request_id=request.request_id,
+        executed_query=request.query,
+        requested_knowledge_sources=request.knowledge_sources,
+        corpus_revisions=tuple(
+            search.corpus_revision
+            for search in searches
+            if search.corpus_revision is not None
+        ),
+        access_scope_fingerprint=snapshot.revision,
+        candidate_counts=CandidateCounts(
+            dense=sum(search.dense_count for search in searches),
+            lexical=sum(search.lexical_count for search in searches),
+            deduplicated=sum(
+                search.deduplicated_count for search in searches
+            ),
+            reranked=0,
+            returned=0,
+        ),
+        timings=RetrievalTimings(
+            embedding_ms=embedding_ms,
+            dense_ms=sum(search.dense_ms for search in searches),
+            lexical_ms=sum(search.lexical_ms for search in searches),
+            fusion_ms=sum(search.fusion_ms for search in searches),
+            rerank_ms=rerank_ms,
+            total_ms=_elapsed_ms(started),
+        ),
+        evidence_items=(),
+        source_outcomes=tuple(
+            _source_outcome(search, 0, 0) for search in searches
+        ),
         status=RetrievalStatus.FAILED,
         failed_stage=failed_stage,
         error_code=error_code,

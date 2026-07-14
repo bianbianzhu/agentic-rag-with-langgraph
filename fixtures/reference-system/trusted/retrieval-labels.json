@@ -1,0 +1,26 @@
+{
+  "version": "retrieval-labels-v1",
+  "cases": {
+    "rollback-incompatibility": {
+      "snapshot": "s1-baseline",
+      "principal_id": "bob",
+      "query": "Why does rollback_token cause undefined_column?",
+      "knowledge_sources": [
+        "engineering-docs",
+        "operational-runbooks"
+      ],
+      "result_limit": 5,
+      "expected_evidence": {
+        "alias": "D2#rollback-incompatibility",
+        "knowledge_source": "engineering-docs",
+        "source_path": "payments/schema-migration.md",
+        "section_path": [
+          "Rollback incompatibility"
+        ]
+      },
+      "forbidden_knowledge_sources": [
+        "operational-runbooks"
+      ]
+    }
+  }
+}

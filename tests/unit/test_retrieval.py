@@ -46,15 +46,17 @@ def test_evidence_item_rejects_access_grant_details() -> None:
                     "kind": "markdown-section",
                     "section_path": ["Recovery"],
                 },
-                "provenance": {
-                    "retrieval_request_id": "request-1",
-                    "dense_rank": 1,
-                    "dense_score": 0.9,
-                    "lexical_rank": 1,
-                    "lexical_score": 0.8,
-                    "fused_rank": 1,
-                    "fused_score": 0.03,
-                },
+                "provenance": [
+                    {
+                        "retrieval_request_id": "request-1",
+                        "dense_rank": 1,
+                        "dense_score": 0.9,
+                        "lexical_rank": 1,
+                        "lexical_score": 0.8,
+                        "fused_rank": 1,
+                        "fused_score": 0.03,
+                    }
+                ],
                 "access_grants": ["payments-on-call"],
             }
         )
@@ -65,7 +67,7 @@ def test_evidence_item_rejects_access_grant_details() -> None:
     [
         ("dense_candidate_limit", 51),
         ("lexical_candidate_limit", 51),
-        ("result_limit", 21),
+        ("result_limit", 9),
     ],
 )
 def test_retrieval_request_rejects_unbounded_budgets(
@@ -114,7 +116,7 @@ def test_source_outcome_rejects_failure_fields_on_completed_status() -> None:
                     "dense": 1,
                     "lexical": 1,
                     "deduplicated": 1,
-                    "reranked": None,
+                    "reranked": 0,
                     "returned": 1,
                 },
                 "timings": {
@@ -122,6 +124,7 @@ def test_source_outcome_rejects_failure_fields_on_completed_status() -> None:
                     "dense_ms": 1,
                     "lexical_ms": 1,
                     "fusion_ms": 1,
+                    "rerank_ms": 0,
                     "total_ms": 3,
                 },
                 "failed_stage": "dense",
@@ -145,7 +148,7 @@ def test_failed_retrieval_result_requires_stage_and_error_code() -> None:
                     "dense": 0,
                     "lexical": 0,
                     "deduplicated": 0,
-                    "reranked": None,
+                    "reranked": 0,
                     "returned": 0,
                 },
                 "timings": {
@@ -153,6 +156,7 @@ def test_failed_retrieval_result_requires_stage_and_error_code() -> None:
                     "dense_ms": 0,
                     "lexical_ms": 0,
                     "fusion_ms": 0,
+                    "rerank_ms": 0,
                     "total_ms": 0,
                 },
                 "evidence_items": [],
