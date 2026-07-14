@@ -1,0 +1,87 @@
+{
+  "policies": {
+    "finance": [
+      {
+        "grant_type": "group",
+        "group_id": "finance"
+      }
+    ],
+    "finance-and-alice": [
+      {
+        "grant_type": "group",
+        "group_id": "finance"
+      },
+      {
+        "grant_type": "principal",
+        "principal_id": "alice"
+      }
+    ],
+    "organization-public": [
+      {
+        "grant_type": "organization-public"
+      }
+    ],
+    "payments-engineering": [
+      {
+        "grant_type": "group",
+        "group_id": "payments-engineering"
+      }
+    ],
+    "payments-on-call": [
+      {
+        "grant_type": "group",
+        "group_id": "payments-on-call"
+      }
+    ]
+  },
+  "sets": {
+    "s0-initial": {
+      "engineering-docs": {
+        "announcements/rollback-incident.md": "payments-engineering",
+        "payments/legacy-rollback-worker.md": "payments-engineering",
+        "payments/platform-overview.md": "payments-engineering",
+        "payments/schema-migration.md": "payments-engineering"
+      },
+      "operational-runbooks": {
+        "finance/settlement-impact.md": "finance-and-alice",
+        "payments/rollback-recovery.md": "payments-on-call"
+      }
+    },
+    "s1-baseline": {
+      "engineering-docs": {
+        "announcements/rollback-incident.md": "organization-public",
+        "payments/platform-overview.md": "payments-engineering",
+        "payments/rollback-worker-compatibility.md": "payments-engineering",
+        "payments/schema-migration.md": "payments-engineering"
+      },
+      "operational-runbooks": {
+        "finance/settlement-impact.md": "finance-and-alice",
+        "payments/rollback-recovery.md": "payments-on-call"
+      }
+    },
+    "auth-change-before": {
+      "engineering-docs": {
+        "announcements/rollback-incident.md": "organization-public",
+        "payments/platform-overview.md": "payments-engineering",
+        "payments/rollback-worker-compatibility.md": "payments-engineering",
+        "payments/schema-migration.md": "payments-engineering"
+      },
+      "operational-runbooks": {
+        "finance/settlement-impact.md": "finance-and-alice",
+        "payments/rollback-recovery.md": "payments-on-call"
+      }
+    },
+    "auth-change-after": {
+      "engineering-docs": {
+        "announcements/rollback-incident.md": "organization-public",
+        "payments/platform-overview.md": "payments-engineering",
+        "payments/rollback-worker-compatibility.md": "payments-engineering",
+        "payments/schema-migration.md": "payments-engineering"
+      },
+      "operational-runbooks": {
+        "finance/settlement-impact.md": "finance",
+        "payments/rollback-recovery.md": "payments-on-call"
+      }
+    }
+  }
+}

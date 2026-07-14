@@ -1,0 +1,1 @@
+Unsupported scratch notes are ignored by Corpus Sync.
