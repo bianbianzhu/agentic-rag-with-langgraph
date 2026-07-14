@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -12,6 +13,24 @@ class KnowledgeSource(StrEnum):
 
     ENGINEERING_DOCS = "engineering-docs"
     OPERATIONAL_RUNBOOKS = "operational-runbooks"
+
+
+class SourceLocator(BaseModel):
+    """Structured Markdown position for one Indexed Chunk."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["markdown-section"] = "markdown-section"
+    section_path: tuple[str, ...]
+
+
+class CorpusRevision(BaseModel):
+    """Published revision queried for one Knowledge Source."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    knowledge_source: KnowledgeSource
+    revision: str = Field(min_length=1)
 
 
 class ProcessingConfig(BaseModel):
