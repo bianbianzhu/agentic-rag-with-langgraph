@@ -1,0 +1,23 @@
+{
+  "principals": [
+    {
+      "principal_id": "alice",
+      "group_ids": [
+        "payments-engineering",
+        "payments-on-call"
+      ]
+    },
+    {
+      "principal_id": "bob",
+      "group_ids": [
+        "payments-engineering"
+      ]
+    },
+    {
+      "principal_id": "carol",
+      "group_ids": [
+        "finance"
+      ]
+    }
+  ]
+}
