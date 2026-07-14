@@ -1,0 +1,1 @@
+"""PostgreSQL component integration tests."""

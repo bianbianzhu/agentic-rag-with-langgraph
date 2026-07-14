@@ -16,7 +16,7 @@ from agentic_rag.authorization import (
 from agentic_rag.corpus import KnowledgeSource
 from agentic_rag.corpus.identity import source_document_id
 from agentic_rag.database import apply_migrations, open_database_pool
-from reference_fixture import (
+from tests.support.reference_fixture import (
     load_reference_snapshot,
     provision_reference_access_scope,
     sync_reference_snapshot,

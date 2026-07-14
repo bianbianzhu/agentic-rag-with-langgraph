@@ -26,7 +26,7 @@ from agentic_rag.retrieval import (
     retrieve,
 )
 from agentic_rag.retrieval.evidence import expand_evidence_set_context
-from reference_fixture import (
+from tests.support.reference_fixture import (
     FIXTURE_ROOT,
     FixtureEmbedder,
     load_reference_snapshot,
