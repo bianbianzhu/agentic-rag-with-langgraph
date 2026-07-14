@@ -1,1 +1,6 @@
 *.zh.md
+.env
+.langgraph_api/
+.pytest_cache/
+.venv/
+__pycache__/

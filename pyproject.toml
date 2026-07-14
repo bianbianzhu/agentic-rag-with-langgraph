@@ -1,0 +1,33 @@
+[project]
+name = "agentic-rag-reference-system"
+version = "0.1.0"
+description = "A production-oriented Agentic RAG Reference System built with LangGraph."
+requires-python = ">=3.11"
+dependencies = [
+    "langchain[openai]>=1.0.0",
+    "langgraph>=1.0.0",
+    "pydantic>=2.10.0",
+]
+
+[dependency-groups]
+dev = [
+    "langgraph-cli[inmem]>=0.4.14",
+    "langgraph-sdk>=0.2.0",
+    "pyright>=1.1.0",
+    "pytest>=8.3.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentic_rag"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
