@@ -1,0 +1,23 @@
+{
+  "version": "reference-scenario-v1",
+  "id": "budget",
+  "fixture_setup": {"snapshot": "s1-baseline", "overlay": null},
+  "principal_id": "alice",
+  "turns": [
+    {
+      "turn_id": "budget-1",
+      "user_message": "Find a nonexistent rollback procedure for lunar settlement.",
+      "expected": {
+        "outcome": "failed",
+        "terminal_reason": "insufficient_evidence",
+        "evidence_aliases": [],
+        "forbidden_evidence_aliases": ["D8#settlement-impact"],
+        "required_claims": [],
+        "forbidden_claims": [],
+        "retrieval_requests": 2,
+        "research_iterations": 1,
+        "answer_repairs": 0
+      }
+    }
+  ]
+}

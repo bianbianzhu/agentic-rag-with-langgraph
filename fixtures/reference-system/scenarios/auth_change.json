@@ -1,0 +1,25 @@
+{
+  "version": "reference-scenario-v1",
+  "id": "auth_change",
+  "fixture_setup": {"snapshot": "s1-baseline", "overlay": null},
+  "principal_id": "alice",
+  "authorization_event": "revoke_alice_finance_after_first_verification",
+  "turns": [
+    {
+      "turn_id": "auth-change-1",
+      "user_message": "What settlement impact can I report?",
+      "expected": {
+        "outcome": "answered",
+        "terminal_reason": null,
+        "evidence_aliases": ["D4#public-incident-summary"],
+        "forbidden_evidence_aliases": ["D8#settlement-impact"],
+        "required_claims": [{"id": "F4", "statement": "Public information says settlement was delayed and later restored."}],
+        "forbidden_claims": [{"id": "F5", "statement": "184 merchants and AUD 2.4 million were delayed for 47 minutes."}],
+        "retrieval_requests": 2,
+        "research_iterations": 0,
+        "answer_repairs": 0,
+        "authorization_restarts": 1
+      }
+    }
+  ]
+}

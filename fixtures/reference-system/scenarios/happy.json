@@ -1,0 +1,23 @@
+{
+  "version": "reference-scenario-v1",
+  "id": "happy",
+  "fixture_setup": {"snapshot": "s1-baseline", "overlay": null},
+  "principal_id": "alice",
+  "turns": [
+    {
+      "turn_id": "happy-1",
+      "user_message": "Why did the production payments rollback fail?",
+      "expected": {
+        "outcome": "answered",
+        "terminal_reason": null,
+        "evidence_aliases": ["D2#rollback-incompatibility"],
+        "forbidden_evidence_aliases": ["D8#settlement-impact"],
+        "required_claims": [{"id": "F2", "statement": "Production rollback worker v1.8 queried rollback_token, received undefined_column, and failed before sending a provider request."}],
+        "forbidden_claims": [],
+        "retrieval_requests": 1,
+        "research_iterations": 0,
+        "answer_repairs": 0
+      }
+    }
+  ]
+}

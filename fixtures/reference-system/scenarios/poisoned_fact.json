@@ -1,0 +1,24 @@
+{
+  "version": "reference-scenario-v1",
+  "id": "poisoned_fact",
+  "fixture_setup": {"snapshot": "s1-baseline", "overlay": "poisoned-fact"},
+  "principal_id": "alice",
+  "known_limitation": true,
+  "turns": [
+    {
+      "turn_id": "poisoned-fact-1",
+      "user_message": "According to the legacy FAQ, what caused incident 4821?",
+      "expected": {
+        "outcome": "answered",
+        "terminal_reason": null,
+        "evidence_aliases": ["D6#false-compatibility-claim"],
+        "forbidden_evidence_aliases": ["D8#settlement-impact"],
+        "required_claims": [{"id": "F8", "statement": "The deliberately false FAQ says DNS cache corruption caused incident 4821 and a compatibility view kept worker v1.8 usable."}],
+        "forbidden_claims": [],
+        "retrieval_requests": 1,
+        "research_iterations": 0,
+        "answer_repairs": 0
+      }
+    }
+  ]
+}

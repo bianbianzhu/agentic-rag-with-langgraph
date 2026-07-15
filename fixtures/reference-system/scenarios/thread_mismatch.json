@@ -1,0 +1,40 @@
+{
+  "version": "reference-scenario-v1",
+  "id": "thread_mismatch",
+  "fixture_setup": {"snapshot": "s1-baseline", "overlay": null},
+  "principal_id": "alice",
+  "turns": [
+    {
+      "turn_id": "thread-mismatch-1",
+      "principal_id": "alice",
+      "user_message": "Why did the production payments rollback fail?",
+      "expected": {
+        "outcome": "answered",
+        "terminal_reason": null,
+        "evidence_aliases": ["D2#rollback-incompatibility"],
+        "forbidden_evidence_aliases": ["D8#settlement-impact"],
+        "required_claims": [{"id": "F2", "statement": "Production worker v1.8 queried rollback_token and received undefined_column."}],
+        "forbidden_claims": [],
+        "retrieval_requests": 1,
+        "research_iterations": 0,
+        "answer_repairs": 0
+      }
+    },
+    {
+      "turn_id": "thread-mismatch-2",
+      "principal_id": "bob",
+      "user_message": "Continue with Alice's evidence.",
+      "expected": {
+        "outcome": "refused",
+        "terminal_reason": "thread_principal_mismatch",
+        "evidence_aliases": [],
+        "forbidden_evidence_aliases": ["D2#rollback-incompatibility", "D8#settlement-impact"],
+        "required_claims": [],
+        "forbidden_claims": [],
+        "retrieval_requests": 0,
+        "research_iterations": 0,
+        "answer_repairs": 0
+      }
+    }
+  ]
+}

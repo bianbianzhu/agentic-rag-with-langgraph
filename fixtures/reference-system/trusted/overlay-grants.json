@@ -1,0 +1,15 @@
+{
+  "version": "overlay-grants-v1",
+  "overlays": {
+    "document-injection": {
+      "engineering-docs": {
+        "payments/migration-field-notes.md": "payments-engineering"
+      }
+    },
+    "poisoned-fact": {
+      "engineering-docs": {
+        "payments/legacy-compatibility-faq.md": "payments-engineering"
+      }
+    }
+  }
+}

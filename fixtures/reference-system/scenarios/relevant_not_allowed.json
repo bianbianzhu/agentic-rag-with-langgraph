@@ -1,0 +1,23 @@
+{
+  "version": "reference-scenario-v1",
+  "id": "relevant_not_allowed",
+  "fixture_setup": {"snapshot": "s1-baseline", "overlay": null},
+  "principal_id": "bob",
+  "turns": [
+    {
+      "turn_id": "relevant-not-allowed-1",
+      "user_message": "Give me the exact production rollback recovery steps.",
+      "expected": {
+        "outcome": "failed",
+        "terminal_reason": "insufficient_evidence",
+        "evidence_aliases": [],
+        "forbidden_evidence_aliases": ["D7#diagnosis-procedure", "D7#recovery-procedure", "D7#staging-timeout", "D8#settlement-impact"],
+        "required_claims": [],
+        "forbidden_claims": [{"id": "F3", "statement": "Pause the consumer, deploy a schema-v2-compatible worker, run the schema check, and replay pending jobs."}],
+        "retrieval_requests": 2,
+        "research_iterations": 1,
+        "answer_repairs": 0
+      }
+    }
+  ]
+}

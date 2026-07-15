@@ -7,6 +7,8 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
+import httpx
+import pytest
 from langgraph_sdk import get_sync_client
 
 
@@ -97,6 +99,11 @@ def test_agent_server_reuses_thread_for_two_turns() -> None:
         assert len(second_result["thread"]["turn_records"]) == 2
         assert len(final_state["values"]["thread"]["turn_records"]) == 2
         assert final_state["values"]["current_turn"] is None
+
+        client.threads.delete(thread_id)
+        with pytest.raises(httpx.HTTPStatusError) as deleted:
+            client.threads.get(thread_id)
+        assert deleted.value.response.status_code == 404
     finally:
         process.terminate()
         try:

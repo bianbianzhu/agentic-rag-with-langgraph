@@ -118,10 +118,20 @@ def run_research_subgraph(
         "incomplete": TurnOutcome.FAILED,
         "failed": TurnOutcome.FAILED,
     }.get(str(status), TurnOutcome.FAILED)
-    reason = None if outcome is TurnOutcome.ANSWERED else str(
+    internal_reason = str(
         result.get("terminal_reason")
         or result.get("failure_reason")
         or "research_failed"
+    )
+    reason = (
+        None
+        if outcome is TurnOutcome.ANSWERED
+        else (
+            "insufficient_evidence"
+            if status == "incomplete"
+            and internal_reason == "research_budget_exhausted"
+            else internal_reason
+        )
     )
     updates.update(
         {

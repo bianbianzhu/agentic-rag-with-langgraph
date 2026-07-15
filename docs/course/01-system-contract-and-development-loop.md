@@ -35,7 +35,9 @@ The Chapter 01 graph has one deterministic node. It increments the minimal Threa
 - `src/agentic_rag/conversation.py` owns the minimal Thread State.
 - `src/agentic_rag/graph/` owns Graph State, the node adapter, and the compiled `graph` export.
 - `langgraph.json` registers that export as `engineering_assistant`.
-- `.env.example` supplies only non-secret local tracing defaults. Core Chapter 01 execution uses `LANGSMITH_TRACING=false` and needs no API key.
+- `.env.example` supplies only non-secret local tracing defaults. Copying it to
+  `.env` enables automatic developer tracing; deterministic tests explicitly
+  disable tracing and need no API key.
 - `tests/unit/` observes only the Runtime Context and compiled-graph seams.
 
 ## Run the loop

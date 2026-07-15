@@ -1,0 +1,23 @@
+{
+  "version": "reference-scenario-v1",
+  "id": "refine",
+  "fixture_setup": {"snapshot": "s1-baseline", "overlay": null},
+  "principal_id": "alice",
+  "turns": [
+    {
+      "turn_id": "refine-1",
+      "user_message": "Which legacy worker version was incompatible with schema v2?",
+      "expected": {
+        "outcome": "answered",
+        "terminal_reason": null,
+        "evidence_aliases": ["D3#legacy-worker-version"],
+        "forbidden_evidence_aliases": ["D8#settlement-impact"],
+        "required_claims": [{"id": "F2", "statement": "Worker v1.8 still expected rollback_token after schema v2 renamed it."}],
+        "forbidden_claims": [],
+        "retrieval_requests": 2,
+        "research_iterations": 1,
+        "answer_repairs": 0
+      }
+    }
+  ]
+}

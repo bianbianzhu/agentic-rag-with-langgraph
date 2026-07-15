@@ -1,0 +1,38 @@
+{
+  "version": "reference-scenario-v1",
+  "id": "multi_turn",
+  "fixture_setup": {"snapshot": "s1-baseline", "overlay": null},
+  "principal_id": "alice",
+  "turns": [
+    {
+      "turn_id": "multi-turn-1",
+      "user_message": "Why did the production payments rollback fail?",
+      "expected": {
+        "outcome": "answered",
+        "terminal_reason": null,
+        "evidence_aliases": ["D2#rollback-incompatibility"],
+        "forbidden_evidence_aliases": ["D8#settlement-impact"],
+        "required_claims": [{"id": "F2", "statement": "Production worker v1.8 queried rollback_token and received undefined_column."}],
+        "forbidden_claims": [],
+        "retrieval_requests": 1,
+        "research_iterations": 0,
+        "answer_repairs": 0
+      }
+    },
+    {
+      "turn_id": "multi-turn-2",
+      "user_message": "Did the same thing happen in staging?",
+      "expected": {
+        "outcome": "answered",
+        "terminal_reason": null,
+        "evidence_aliases": ["D7#staging-timeout"],
+        "forbidden_evidence_aliases": ["D8#settlement-impact"],
+        "required_claims": [{"id": "F6", "statement": "Staging failed because its migration job timed out before schema v2 completed."}],
+        "forbidden_claims": [{"id": "F2", "statement": "Staging failed because worker v1.8 queried rollback_token."}],
+        "retrieval_requests": 1,
+        "research_iterations": 0,
+        "answer_repairs": 0
+      }
+    }
+  ]
+}

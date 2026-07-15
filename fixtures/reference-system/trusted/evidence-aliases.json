@@ -1,0 +1,65 @@
+{
+  "version": "evidence-aliases-v1",
+  "aliases": {
+    "D1#platform-topology": {
+      "knowledge_source": "engineering-docs",
+      "source_path": "payments/platform-overview.md",
+      "section_path": ["Platform topology"]
+    },
+    "D2#schema-change": {
+      "knowledge_source": "engineering-docs",
+      "source_path": "payments/schema-migration.md",
+      "section_path": ["Schema change"]
+    },
+    "D2#rollback-incompatibility": {
+      "knowledge_source": "engineering-docs",
+      "source_path": "payments/schema-migration.md",
+      "section_path": ["Rollback incompatibility"]
+    },
+    "D3#legacy-worker-version": {
+      "knowledge_source": "engineering-docs",
+      "source_path": "payments/rollback-worker-compatibility.md",
+      "section_path": ["Legacy worker version"]
+    },
+    "D4#public-incident-summary": {
+      "knowledge_source": "engineering-docs",
+      "source_path": "announcements/rollback-incident.md",
+      "section_path": ["Public incident summary"]
+    },
+    "D5#valid-field-note": {
+      "knowledge_source": "engineering-docs",
+      "source_path": "payments/migration-field-notes.md",
+      "section_path": ["Valid field note"]
+    },
+    "D5#embedded-instruction": {
+      "knowledge_source": "engineering-docs",
+      "source_path": "payments/migration-field-notes.md",
+      "section_path": ["Embedded instruction"]
+    },
+    "D6#false-compatibility-claim": {
+      "knowledge_source": "engineering-docs",
+      "source_path": "payments/legacy-compatibility-faq.md",
+      "section_path": ["False compatibility claim"]
+    },
+    "D7#diagnosis-procedure": {
+      "knowledge_source": "operational-runbooks",
+      "source_path": "payments/rollback-recovery.md",
+      "section_path": ["Diagnosis procedure"]
+    },
+    "D7#recovery-procedure": {
+      "knowledge_source": "operational-runbooks",
+      "source_path": "payments/rollback-recovery.md",
+      "section_path": ["Recovery procedure"]
+    },
+    "D7#staging-timeout": {
+      "knowledge_source": "operational-runbooks",
+      "source_path": "payments/rollback-recovery.md",
+      "section_path": ["Staging timeout"]
+    },
+    "D8#settlement-impact": {
+      "knowledge_source": "operational-runbooks",
+      "source_path": "finance/settlement-impact.md",
+      "section_path": ["Confidential impact"]
+    }
+  }
+}

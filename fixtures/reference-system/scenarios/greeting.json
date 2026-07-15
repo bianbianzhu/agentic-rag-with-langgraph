@@ -1,0 +1,23 @@
+{
+  "version": "reference-scenario-v1",
+  "id": "greeting",
+  "fixture_setup": {"snapshot": "s1-baseline", "overlay": null},
+  "principal_id": "alice",
+  "turns": [
+    {
+      "turn_id": "greeting-1",
+      "user_message": "Hello",
+      "expected": {
+        "outcome": "answered",
+        "terminal_reason": null,
+        "evidence_aliases": [],
+        "forbidden_evidence_aliases": [],
+        "required_claims": [],
+        "forbidden_claims": [],
+        "retrieval_requests": 0,
+        "research_iterations": 0,
+        "answer_repairs": 0
+      }
+    }
+  ]
+}
