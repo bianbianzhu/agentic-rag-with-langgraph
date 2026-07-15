@@ -2,7 +2,7 @@
 
 ## Project
 
-Engineering-first course for building a multi-agent RAG system with LangGraph. Separate retrieval, embeddings, indexing, reranking, generation, and verification into agents. Cover core modules through deployment and monitoring.
+Engineering-first course for building a multi-agent RAG system with LangGraph. Separate ingestion, embeddings, indexing, retrieval, reranking, generation, and verification into explicit components; use agents only where contextual decisions are required. Cover core modules through deployment and monitoring.
 
 ## Language
 
@@ -51,3 +51,17 @@ For multi-step work, state a short plan:
 ```
 
 Prefer concrete checks over vague goals.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked as local Markdown files under `.scratch/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The default five-role triage vocabulary is used. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository with `CONTEXT.md` at the root and ADRs under `docs/adr/`. See `docs/agents/domain.md`.
