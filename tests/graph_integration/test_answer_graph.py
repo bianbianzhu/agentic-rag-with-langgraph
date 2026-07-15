@@ -41,7 +41,7 @@ from agentic_rag.retrieval import (
     retrieve,
 )
 from agentic_rag.retrieval.evidence import expand_evidence_set_context
-from agentic_rag.runtime import RuntimeContext
+from agentic_rag.runtime import RuntimeContext, TurnExecutionBudget
 from tests.support.reference_fixture import (
     FIXTURE_ROOT,
     FixtureEmbedder,
@@ -143,6 +143,7 @@ def answer_input(
         "question": "Why does rollback_token cause undefined_column?",
         "evidence_set": evidence_set.model_dump(mode="json"),
         "authorization_snapshot": snapshot.model_dump(mode="json"),
+        "model_calls": 0,
         "repair_count": 0,
         "status": "pending",
     }
@@ -177,6 +178,7 @@ def test_compiled_answer_graph_releases_only_verified_cited_answer(
     assert answer.assistant_message.endswith("[E1]")
     assert [citation.key for citation in answer.citations] == ["E1"]
     assert result["repair_count"] == 0
+    assert result["model_calls"] == 2
     assert model.requested_schemas == [
         "CitationDraft",
         "VerificationDecision",
@@ -242,6 +244,31 @@ def test_second_invalid_draft_ends_in_safe_incomplete_projection(
     assert invalid_text not in answer.assistant_message
     assert result["repair_count"] == 1
     assert model.requested_schemas == ["CitationDraft", "CitationDraft"]
+
+
+def test_answer_graph_obeys_remaining_turn_model_budget(
+    answer_input: tuple[AnswerGraphState, RuntimeContext],
+) -> None:
+    state, context = answer_input
+    model = DeterministicAnswerModel(
+        responses=[_draft("The old worker queried the removed column.", "E1")]
+    )
+
+    result = answer_graph.invoke(
+        state,
+        context=RuntimeContext(
+            principal_id=context.principal_id,
+            database_pool=context.database_pool,
+            answer_model=model,
+            execution_budget=TurnExecutionBudget(model_call_limit=1),
+        ),
+    )
+
+    answer = CitedAnswer.model_validate(result["cited_answer"])
+    assert answer.status is CitedAnswerStatus.INCOMPLETE
+    assert result["failure_reason"] == "model_calls_exhausted"
+    assert result["model_calls"] == 1
+    assert model.requested_schemas == ["CitationDraft"]
 
 
 def test_semantically_unsupported_claim_gets_one_repair(

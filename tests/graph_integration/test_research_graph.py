@@ -278,6 +278,30 @@ def test_retrieval_failure_is_an_explicit_terminal(
     assert model.requested_schemas == ["ResearchPlan"]
 
 
+def test_exceptional_retrieval_preserves_reserved_turn_counters(
+    research_input: tuple[ResearchGraphState, RuntimeContext],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, base_context = research_input
+    model = DeterministicResearchModel(responses=[_plan("rollback failure")])
+
+    def fail_retrieval(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("injected retrieval failure")
+
+    monkeypatch.setattr(
+        "agentic_rag.graph.nodes.retrieve", fail_retrieval
+    )
+    result = _invoke(state, base_context, model)
+
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "retrieval_failed"
+    assert result["counters"] == {
+        "model_calls": 2,
+        "retrieval_requests": 1,
+        "research_iterations": 0,
+    }
+
+
 def test_model_budget_is_reserved_before_reranker_call(
     research_input: tuple[ResearchGraphState, RuntimeContext],
 ) -> None:

@@ -1,7 +1,10 @@
 import pytest
 
+from agentic_rag.authorization import AuthorizationSnapshot
+from agentic_rag.citations import incomplete_answer
 from agentic_rag.conversation import (
     ThreadState,
+    TurnOutcome,
     TurnResumeIncompatibleError,
 )
 from agentic_rag.graph import graph
@@ -36,6 +39,49 @@ def test_graph_rejects_an_incompatible_checkpoint_schema() -> None:
             },
             context=RuntimeContext(principal_id="alice"),
         )
+
+
+def test_authorization_restart_discards_work_but_preserves_budgets() -> None:
+    answer = incomplete_answer()
+    work = CurrentTurnWork(
+        turn_id="turn-1",
+        user_message="Why did rollback fail?",
+        stage="authorizing",
+        model_calls=5,
+        retrieval_requests=1,
+        research_iterations=1,
+        answer_repairs=1,
+        standalone_question="Why did rollback fail?",
+        authorization_snapshot=AuthorizationSnapshot(
+            principal_id="alice", revision="auth_" + "0" * 64
+        ),
+        cited_answer=answer,
+        assistant_message=answer.assistant_message,
+        outcome=TurnOutcome.FAILED,
+        terminal_reason="insufficient_evidence",
+        pre_compaction_thread=ThreadState(
+            principal_id="alice",
+            active_turn_id="turn-1",
+            active_turn_fingerprint="before-compaction",
+        ),
+    )
+
+    restarted = work.restart_after_authorization_change()
+
+    assert restarted.stage == "prepared"
+    assert restarted.authorization_restarts == 1
+    assert restarted.model_calls == 5
+    assert restarted.retrieval_requests == 1
+    assert restarted.research_iterations == 1
+    assert restarted.answer_repairs == 1
+    assert restarted.standalone_question is None
+    assert restarted.authorization_snapshot is None
+    assert restarted.evidence_set is None
+    assert restarted.cited_answer is None
+    assert restarted.assistant_message is None
+    assert restarted.pre_compaction_thread is None
+    with pytest.raises(ValueError, match="restart limit"):
+        restarted.restart_after_authorization_change()
 
 
 def test_graph_completes_deterministic_turn() -> None:
@@ -102,6 +148,4 @@ def test_graph_reuses_json_safe_thread_state_for_next_turn() -> None:
         "turn-2",
     ]
     assert thread.turn_records[-1].outcome.value == "failed"
-    assert thread.turn_records[-1].terminal_reason == (
-        "contextualization_unavailable"
-    )
+    assert thread.turn_records[-1].terminal_reason == "authorization_unavailable"

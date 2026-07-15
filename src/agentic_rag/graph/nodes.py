@@ -21,7 +21,6 @@ from agentic_rag.agents.research import (
 )
 from agentic_rag.authorization import (
     AuthorizationSnapshot,
-    capture_authorization_snapshot,
 )
 from agentic_rag.citations import (
     CitationDraft,
@@ -109,27 +108,6 @@ def prepare_turn(
     }
 
 
-def route_after_prepare(state: GraphState) -> str:
-    return _route_current_turn(state, allow_end=True)
-
-
-def _route_current_turn(state: GraphState, *, allow_end: bool) -> str:
-    raw_current_turn = state["current_turn"]
-    if raw_current_turn is None:
-        if allow_end:
-            return "end"
-        raise ValueError("current_turn is required")
-    current_turn = CurrentTurnWork.model_validate(raw_current_turn)
-    if current_turn.stage == "terminal":
-        return "complete_turn"
-    thread = ThreadState.model_validate(state["thread"])
-    if active_thread_memory_tokens(
-        thread, current_turn.user_message
-    ) > 2_000:
-        return "compact_context"
-    return "contextualize_turn"
-
-
 def compact_context(
     state: GraphState, runtime: Runtime[RuntimeContext]
 ) -> dict[str, object]:
@@ -141,6 +119,14 @@ def compact_context(
     thread = ThreadState.model_validate(state["thread"])
     current_turn = CurrentTurnWork.model_validate(raw_current_turn)
     config = runtime.context.contextualization_config
+    if current_turn.compaction_attempts >= config.summary_retry_limit:
+        return _terminal_work(
+            current_turn,
+            thread,
+            "I could not safely compact the conversation context.",
+            TurnOutcome.FAILED,
+            "context_compaction_failed",
+        )
     if current_turn.model_calls >= runtime.context.execution_budget.model_call_limit:
         return _terminal_work(
             current_turn,
@@ -165,7 +151,13 @@ def compact_context(
     )
     model = runtime.context.contextualization_model
     pool = runtime.context.database_pool
-    if not records_to_compact or model is None or pool is None:
+    snapshot = current_turn.authorization_snapshot
+    if (
+        not records_to_compact
+        or model is None
+        or pool is None
+        or snapshot is None
+    ):
         return _terminal_work(
             current_turn,
             thread,
@@ -175,9 +167,6 @@ def compact_context(
         )
 
     try:
-        snapshot = capture_authorization_snapshot(
-            pool, runtime.context.principal_id
-        )
         authorized_records = tuple(
             project_authorized_turn_record(pool, snapshot, record)
             for record in records_to_compact
@@ -233,7 +222,7 @@ def compact_context(
             }
         )
         if attempts < config.summary_retry_limit:
-            return _checkpoint_work(thread, updated)
+            return checkpoint_turn_work(thread, updated)
         return _terminal_work(
             updated,
             thread,
@@ -244,16 +233,34 @@ def compact_context(
 
     updated = current_turn.model_copy(
         update={
-            "stage": "prepared",
+            "stage": "authorized",
             "model_calls": model_calls,
             "compaction_attempts": attempts,
+            "pre_compaction_thread": (
+                current_turn.pre_compaction_thread or thread
+            ),
         }
     )
-    return _checkpoint_work(compacted, updated)
+    return checkpoint_turn_work(compacted, updated)
 
 
 def route_after_compaction(state: GraphState) -> str:
-    return _route_current_turn(state, allow_end=False)
+    current_turn = CurrentTurnWork.model_validate(state["current_turn"])
+    if current_turn.stage == "authorizing":
+        return "authorize_and_commit_turn"
+    if turn_requires_compaction(state):
+        return "compact_context"
+    return "contextualize_turn"
+
+
+def turn_requires_compaction(state: GraphState) -> bool:
+    """Return whether semantic memory exceeds the fixed context budget."""
+
+    current_turn = CurrentTurnWork.model_validate(state["current_turn"])
+    thread = ThreadState.model_validate(state["thread"])
+    return (
+        active_thread_memory_tokens(thread, current_turn.user_message) > 2_000
+    )
 
 
 def contextualize_turn(
@@ -263,14 +270,17 @@ def contextualize_turn(
 
     current_turn = CurrentTurnWork.model_validate(state["current_turn"])
     thread = ThreadState.model_validate(state["thread"])
+    snapshot = current_turn.authorization_snapshot
+    if snapshot is None:
+        raise ValueError("contextualization requires an Authorization Snapshot")
     if not thread.turn_records and thread.summary is None:
-        return _terminal_work(
-            current_turn,
-            thread,
-            "The Reference System development loop is ready.",
-            TurnOutcome.ANSWERED,
-            None,
+        researching = current_turn.model_copy(
+            update={
+                "stage": "researching",
+                "standalone_question": current_turn.user_message,
+            }
         )
+        return checkpoint_turn_work(thread, researching)
     model = runtime.context.contextualization_model
     pool = runtime.context.database_pool
     if model is None or pool is None:
@@ -299,9 +309,6 @@ def contextualize_turn(
         )
 
     try:
-        snapshot = capture_authorization_snapshot(
-            pool, runtime.context.principal_id
-        )
         authorized_context = project_authorized_thread_context(
             pool,
             snapshot,
@@ -351,14 +358,13 @@ def contextualize_turn(
             "clarification_needed",
             standalone_question=rewrite.standalone_question,
         )
-    return _terminal_work(
-        updated,
-        thread,
-        "The Reference System development loop is ready.",
-        TurnOutcome.ANSWERED,
-        None,
-        standalone_question=rewrite.standalone_question,
+    researching = updated.model_copy(
+        update={
+            "stage": "researching",
+            "standalone_question": rewrite.standalone_question,
+        }
     )
+    return checkpoint_turn_work(thread, researching)
 
 
 def complete_turn(state: GraphState) -> dict[str, object]:
@@ -400,7 +406,11 @@ def _terminal_work(
 ) -> dict[str, object]:
     terminal = current_turn.model_copy(
         update={
-            "stage": "terminal",
+            "stage": (
+                "authorizing"
+                if current_turn.authorization_snapshot is not None
+                else "terminal"
+            ),
             "standalone_question": (
                 standalone_question or current_turn.user_message
             ),
@@ -409,10 +419,10 @@ def _terminal_work(
             "terminal_reason": terminal_reason,
         }
     )
-    return _checkpoint_work(thread, terminal)
+    return checkpoint_turn_work(thread, terminal)
 
 
-def _checkpoint_work(
+def checkpoint_turn_work(
     thread: ThreadState, current_turn: CurrentTurnWork
 ) -> dict[str, object]:
     checkpointed_thread = thread.model_copy(
@@ -463,7 +473,14 @@ def generate_answer(
 ) -> dict[str, object]:
     """Generate the first buffered structured answer draft."""
 
-    return _generate_or_repair(state, runtime, repair_feedback=None)
+    model_calls, failure = _reserve_answer_model_call(state, runtime)
+    if failure is not None:
+        return _answer_model_failure(model_calls, failure)
+    result = _generate_or_repair(state, runtime, repair_feedback=None)
+    result["model_calls"] = model_calls
+    if _turn_deadline_exceeded(runtime.context):
+        return _answer_model_failure(model_calls, "deadline_exceeded")
+    return result
 
 
 def repair_answer(
@@ -484,10 +501,20 @@ def repair_answer(
         feedback = "citation_errors:" + ",".join(
             error.value for error in validation.errors
         )
+    model_calls, failure = _reserve_answer_model_call(state, runtime)
+    if failure is not None:
+        result = _answer_model_failure(model_calls, failure)
+        result["repair_count"] = state["repair_count"] + 1
+        return result
     result = _generate_or_repair(
         state, runtime, repair_feedback=feedback
     )
+    result["model_calls"] = model_calls
     result["repair_count"] = state["repair_count"] + 1
+    if _turn_deadline_exceeded(runtime.context):
+        result.update(
+            _answer_model_failure(model_calls, "deadline_exceeded")
+        )
     return result
 
 
@@ -512,6 +539,13 @@ def verify_answer(
 ) -> dict[str, object]:
     """Judge whether cited Evidence semantically supports every claim."""
 
+    model_calls, failure = _reserve_answer_model_call(state, runtime)
+    if failure is not None:
+        return {
+            "verification": None,
+            "failure_reason": failure,
+            "model_calls": model_calls,
+        }
     model = runtime.context.answer_model
     if model is None:
         raise ValueError("answer_model is required for the Answer subgraph")
@@ -527,10 +561,18 @@ def verify_answer(
         return {
             "verification": None,
             "failure_reason": "verification_failed",
+            "model_calls": model_calls,
+        }
+    if _turn_deadline_exceeded(runtime.context):
+        return {
+            "verification": None,
+            "failure_reason": "deadline_exceeded",
+            "model_calls": model_calls,
         }
     return {
         "verification": decision.model_dump(mode="json"),
         "failure_reason": None,
+        "model_calls": model_calls,
     }
 
 
@@ -599,6 +641,11 @@ def route_after_hydration(state: AnswerGraphState) -> str:
 def route_after_generation(state: AnswerGraphState) -> str:
     if state.get("draft") is not None:
         return "validate"
+    if state.get("failure_reason") in (
+        "deadline_exceeded",
+        "model_calls_exhausted",
+    ):
+        return "finish_incomplete"
     return "repair" if state["repair_count"] < 1 else "finish_incomplete"
 
 
@@ -623,6 +670,29 @@ def route_after_verification(state: AnswerGraphState) -> str:
 
 def route_after_repair(state: AnswerGraphState) -> str:
     return "validate" if state.get("draft") is not None else "finish_incomplete"
+
+
+def _reserve_answer_model_call(
+    state: AnswerGraphState, runtime: Runtime[RuntimeContext]
+) -> tuple[int, str | None]:
+    consumed = state["model_calls"]
+    if _turn_deadline_exceeded(runtime.context):
+        return consumed, "deadline_exceeded"
+    if consumed >= runtime.context.execution_budget.model_call_limit:
+        return consumed, "model_calls_exhausted"
+    return consumed + 1, None
+
+
+def _answer_model_failure(
+    model_calls: int, failure_reason: str
+) -> dict[str, object]:
+    return {
+        "draft": None,
+        "validation": None,
+        "verification": None,
+        "failure_reason": failure_reason,
+        "model_calls": model_calls,
+    }
 
 
 def _generate_or_repair(
@@ -793,36 +863,39 @@ def retrieve_research_evidence(
         lexical_candidate_limit=50,
         result_limit=8,
     )
-    result = retrieve(
-        context.database_pool,
-        snapshot,
-        request,
-        context.retrieval_config,
-        context.embedder,
-        context.reranker,
-    )
-    if (
-        result.candidate_counts.reranked == 0
-        and result.failed_stage is not RetrievalStage.RERANK
-    ):
-        counters = counters.model_copy(
-            update={"model_calls": counters.model_calls - 1}
+    try:
+        result = retrieve(
+            context.database_pool,
+            snapshot,
+            request,
+            context.retrieval_config,
+            context.embedder,
+            context.reranker,
         )
+        if (
+            result.candidate_counts.reranked == 0
+            and result.failed_stage is not RetrievalStage.RERANK
+        ):
+            counters = counters.model_copy(
+                update={"model_calls": counters.model_calls - 1}
+            )
+        previous = tuple(
+            RetrievalResult.model_validate(value)
+            for value in state["retrieval_results"]
+        )
+        all_results = previous + (result,)
+        evidence_set = expand_evidence_set_context(
+            context.database_pool,
+            snapshot,
+            assemble_evidence_set(all_results, context.retrieval_config),
+            context.retrieval_config,
+        )
+    except Exception:
+        return _research_terminal("failed", "retrieval_failed", counters)
     if _research_deadline_exceeded(context):
         return _research_terminal(
             "incomplete", "deadline_exceeded", counters
         )
-    previous = tuple(
-        RetrievalResult.model_validate(value)
-        for value in state["retrieval_results"]
-    )
-    all_results = previous + (result,)
-    evidence_set = expand_evidence_set_context(
-        context.database_pool,
-        snapshot,
-        assemble_evidence_set(all_results, context.retrieval_config),
-        context.retrieval_config,
-    )
     if _research_deadline_exceeded(context):
         return _research_terminal(
             "incomplete", "deadline_exceeded", counters

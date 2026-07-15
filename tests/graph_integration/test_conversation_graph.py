@@ -14,7 +14,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 from psycopg_pool import ConnectionPool
 from pydantic import Field
 
+from agentic_rag.agents.answering import VerificationDecision
 from agentic_rag.agents.contextualization import ContextualRewrite
+from agentic_rag.agents.research import (
+    EvidenceAssessment,
+    PlanAction,
+    PlanTerminalReason,
+    ResearchPlan,
+)
 from agentic_rag.authorization import (
     AuthorizationSnapshot,
     capture_authorization_snapshot,
@@ -35,11 +42,25 @@ from agentic_rag.conversation import (
 )
 from agentic_rag.corpus import KnowledgeSource
 from agentic_rag.corpus.models import SourceLocator
+from agentic_rag.citations import (
+    CitationDraft,
+    DraftClaim,
+    DraftDisposition,
+)
 from agentic_rag.database import apply_migrations, open_database_pool
 from agentic_rag.graph._turn import build_turn_graph
 from agentic_rag.graph.state import GraphState
+from agentic_rag.retrieval import (
+    RerankCandidate,
+    RerankItem,
+    RerankOutput,
+    RetrievalConfig,
+)
 from agentic_rag.runtime import RuntimeContext, TurnExecutionBudget
-from tests.support.reference_fixture import load_reference_snapshot
+from tests.support.reference_fixture import (
+    FixtureEmbedder,
+    load_reference_snapshot,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
@@ -79,7 +100,8 @@ class DeterministicContextModel(BaseChatModel):
     ) -> Runnable[Any, Any]:
         def next_response(value: object) -> Any:
             self.inputs.append(value)
-            return self.responses.pop(0)
+            response = self.responses.pop(0)
+            return response() if callable(response) else response
 
         return RunnableLambda(next_response)
 
@@ -439,12 +461,15 @@ def test_context_compaction_retries_then_commits_bounded_memory(
         "turn-3",
         "turn-4",
     ]
-    assert thread.turn_records[-1].outcome is TurnOutcome.ANSWERED
+    assert thread.turn_records[-1].outcome is TurnOutcome.FAILED
+    assert thread.turn_records[-1].terminal_reason == "research_failed"
 
 
 def test_failed_context_compaction_preserves_old_turns(
+    database_pool: ConnectionPool,
     retrieval_pool: ConnectionPool,
 ) -> None:
+    load_reference_snapshot(database_pool)
     model = DeterministicContextModel(
         responses=[{"invalid": True}, {"still_invalid": True}]
     )
@@ -713,6 +738,451 @@ def test_compaction_never_sends_revoked_history_to_the_model(
     assert "historical_evidence_no_longer_authorized" in str(model.inputs[0])
 
 
+def test_authorization_change_discards_work_and_restarts_once(
+    database_pool: ConnectionPool,
+    retrieval_pool: ConnectionPool,
+) -> None:
+    load_reference_snapshot(database_pool)
+    research_model = DeterministicContextModel(
+        responses=[
+            _research_plan(),
+            EvidenceAssessment(sufficient=True),
+            _research_plan(),
+            EvidenceAssessment(sufficient=True),
+        ]
+    )
+    grant: tuple[str, str] | None = None
+
+    def change_scope_once() -> VerificationDecision:
+        nonlocal grant
+        grant = _grant_unrelated_document(database_pool, "bob")
+        return VerificationDecision(supported=True)
+
+    answer_model = DeterministicContextModel(
+        responses=[
+            _answer_draft("DISCARDED_ANSWER_CANARY"),
+            change_scope_once,
+            _answer_draft("AUTHORIZED_RESTARTED_ANSWER"),
+            VerificationDecision(supported=True),
+        ]
+    )
+
+    result = build_turn_graph().invoke(
+        {
+            "thread": ThreadState(),
+            "current_turn": {
+                "turn_id": "turn-authorization-restart",
+                "user_message": "Why did the payments rollback fail?",
+            },
+        },
+        context=_full_turn_context(
+            retrieval_pool, research_model, answer_model
+        ),
+    )
+
+    thread = ThreadState.model_validate(result["thread"])
+    record = thread.turn_records[-1]
+    assert grant is not None
+    assert record.outcome is TurnOutcome.ANSWERED
+    assert "AUTHORIZED_RESTARTED_ANSWER" in record.assistant_message
+    assert "DISCARDED_ANSWER_CANARY" not in thread.model_dump_json()
+    assert record.citation_dependencies
+    assert len(research_model.inputs) == 4
+    assert len(answer_model.inputs) == 4
+
+
+def test_second_authorization_change_fails_without_stale_output(
+    database_pool: ConnectionPool,
+    retrieval_pool: ConnectionPool,
+) -> None:
+    load_reference_snapshot(database_pool)
+    research_model = DeterministicContextModel(
+        responses=[
+            _research_plan(),
+            EvidenceAssessment(sufficient=True),
+            _research_plan(),
+            EvidenceAssessment(sufficient=True),
+        ]
+    )
+    grant: tuple[str, str] | None = None
+
+    def first_change() -> VerificationDecision:
+        nonlocal grant
+        grant = _grant_unrelated_document(database_pool, "bob")
+        return VerificationDecision(supported=True)
+
+    def second_change() -> VerificationDecision:
+        assert grant is not None
+        with database_pool.connection() as connection:
+            connection.execute(
+                """
+                DELETE FROM access_grants
+                WHERE knowledge_source = %s AND document_id = %s
+                  AND grant_type = 'principal' AND principal_id = 'bob'
+                """,
+                grant,
+            )
+        return VerificationDecision(supported=True)
+
+    answer_model = DeterministicContextModel(
+        responses=[
+            _answer_draft("FIRST_DISCARDED_CANARY"),
+            first_change,
+            _answer_draft("SECOND_DISCARDED_CANARY"),
+            second_change,
+        ]
+    )
+
+    result = build_turn_graph().invoke(
+        {
+            "thread": ThreadState(),
+            "current_turn": {
+                "turn_id": "turn-authorization-fail",
+                "user_message": "Why did the payments rollback fail?",
+            },
+        },
+        context=_full_turn_context(
+            retrieval_pool, research_model, answer_model
+        ),
+    )
+
+    thread = ThreadState.model_validate(result["thread"])
+    record = thread.turn_records[-1]
+    serialized = thread.model_dump_json()
+    assert record.outcome is TurnOutcome.FAILED
+    assert record.terminal_reason == "authorization_changed_twice"
+    assert record.citation_dependencies == ()
+    assert "FIRST_DISCARDED_CANARY" not in serialized
+    assert "SECOND_DISCARDED_CANARY" not in serialized
+
+
+def test_revoked_evidence_is_discarded_before_a_safe_restart_result(
+    database_pool: ConnectionPool,
+    retrieval_pool: ConnectionPool,
+) -> None:
+    load_reference_snapshot(database_pool)
+    research_model = DeterministicContextModel(
+        responses=[
+            _research_plan(),
+            EvidenceAssessment(sufficient=True),
+            ResearchPlan(
+                action=PlanAction.DIRECT,
+                terminal_reason=PlanTerminalReason.GREETING,
+            ),
+        ]
+    )
+
+    def revoke_engineering_scope() -> VerificationDecision:
+        with database_pool.connection() as connection:
+            connection.execute(
+                """
+                DELETE FROM principal_group_memberships
+                WHERE principal_id = 'bob'
+                  AND group_id = 'payments-engineering'
+                """
+            )
+        return VerificationDecision(supported=True)
+
+    answer_model = DeterministicContextModel(
+        responses=[
+            _answer_draft("REVOKED_EVIDENCE_ANSWER_CANARY"),
+            revoke_engineering_scope,
+        ]
+    )
+    result = build_turn_graph().invoke(
+        {
+            "thread": ThreadState(),
+            "current_turn": {
+                "turn_id": "turn-revocation",
+                "user_message": "Why did the payments rollback fail?",
+            },
+        },
+        context=RuntimeContext(
+            principal_id="bob",
+            database_pool=retrieval_pool,
+            research_model=research_model,
+            answer_model=answer_model,
+            embedder=FixtureEmbedder(),
+            reranker=_rerank_private_first,
+            retrieval_config=RetrievalConfig(
+                embedding_model="deterministic-test-v1"
+            ),
+        ),
+    )
+
+    thread = ThreadState.model_validate(result["thread"])
+    record = thread.turn_records[-1]
+    assert record.outcome is TurnOutcome.ANSWERED
+    assert record.assistant_message.startswith("Hello.")
+    assert record.citation_dependencies == ()
+    assert "REVOKED_EVIDENCE_ANSWER_CANARY" not in thread.model_dump_json()
+    assert len(research_model.inputs) == 3
+    assert len(answer_model.inputs) == 2
+    assert "Worker v1.8 expects" in str(answer_model.inputs[0])
+
+
+def test_scope_change_during_clarification_restarts_before_commit(
+    database_pool: ConnectionPool,
+    retrieval_pool: ConnectionPool,
+) -> None:
+    load_reference_snapshot(database_pool)
+    grant: tuple[str, str] | None = None
+
+    def change_scope_during_rewrite() -> ContextualRewrite:
+        nonlocal grant
+        grant = _grant_unrelated_document(database_pool, "bob")
+        return _clarification_rewrite()
+
+    model = DeterministicContextModel(
+        responses=[change_scope_during_rewrite, _clarification_rewrite()]
+    )
+    thread = ThreadState(
+        principal_id="bob",
+        turn_records=(
+            TurnRecord(
+                turn_id="turn-1",
+                user_message="The rollback failed.",
+                standalone_question="Why did the rollback fail?",
+                assistant_message="A prior safe answer.",
+                outcome=TurnOutcome.ANSWERED,
+            ),
+        ),
+    )
+
+    result = build_turn_graph().invoke(
+        {
+            "thread": thread,
+            "current_turn": {
+                "turn_id": "turn-2",
+                "user_message": "Did it happen there too?",
+            },
+        },
+        context=RuntimeContext(
+            principal_id="bob",
+            database_pool=retrieval_pool,
+            contextualization_model=model,
+        ),
+    )
+
+    completed = ThreadState.model_validate(result["thread"])
+    record = completed.turn_records[-1]
+    assert grant is not None
+    assert len(model.inputs) == 2
+    assert record.outcome is TurnOutcome.CLARIFICATION_REQUESTED
+    assert record.terminal_reason == "clarification_needed"
+
+
+def test_authorization_restart_rolls_back_and_rebuilds_compaction(
+    database_pool: ConnectionPool,
+    retrieval_pool: ConnectionPool,
+) -> None:
+    load_reference_snapshot(database_pool)
+    dependency = _finance_dependency(database_pool)
+    records = list(_long_thread().turn_records)
+    records[0] = records[0].model_copy(
+        update={
+            "assistant_message": "SUMMARY_SCOPE_CANARY" + "a" * 1_300,
+            "citation_dependencies": (dependency,),
+        }
+    )
+    thread = ThreadState(principal_id="alice", turn_records=tuple(records))
+    config = RuntimeContext(principal_id="alice").contextualization_config
+    first_summary = ConversationSummary(
+        model_version=config.model_id,
+        items=(
+            SummaryItem(
+                kind=SummaryItemKind.TOPIC,
+                text="SUMMARY_SCOPE_CANARY",
+                source_turn_ids=("turn-1", "turn-2"),
+            ),
+        ),
+        covered_through_turn_id="turn-2",
+    )
+    rebuilt_summary = ConversationSummary(
+        model_version=config.model_id,
+        items=(
+            SummaryItem(
+                kind=SummaryItemKind.TOPIC,
+                text="Authorized rollback discussion.",
+                source_turn_ids=("turn-1", "turn-2"),
+            ),
+        ),
+        covered_through_turn_id="turn-2",
+    )
+    context_model = DeterministicContextModel(
+        responses=[
+            first_summary,
+            _standalone_rewrite("What changed next?"),
+            rebuilt_summary,
+            _standalone_rewrite("What changed next?"),
+        ]
+    )
+    research_model = DeterministicContextModel(
+        responses=[
+            _research_plan(),
+            EvidenceAssessment(sufficient=True),
+            ResearchPlan(
+                action=PlanAction.DIRECT,
+                terminal_reason=PlanTerminalReason.GREETING,
+            ),
+        ]
+    )
+
+    def revoke_summary_dependency() -> VerificationDecision:
+        with database_pool.connection() as connection:
+            connection.execute(
+                """
+                DELETE FROM access_grants
+                WHERE grant_type = 'principal' AND principal_id = 'alice'
+                  AND document_id = %s
+                """,
+                (dependency.document_id,),
+            )
+        return VerificationDecision(supported=True)
+
+    answer_model = DeterministicContextModel(
+        responses=[
+            _answer_draft("DISCARDED_AFTER_COMPACTION"),
+            revoke_summary_dependency,
+        ]
+    )
+    result = build_turn_graph().invoke(
+        {
+            "thread": thread,
+            "current_turn": {
+                "turn_id": "turn-4",
+                "user_message": "What changed next?",
+            },
+        },
+        context=RuntimeContext(
+            principal_id="alice",
+            database_pool=retrieval_pool,
+            contextualization_model=context_model,
+            research_model=research_model,
+            answer_model=answer_model,
+            embedder=FixtureEmbedder(),
+            reranker=_rerank_all,
+            retrieval_config=RetrievalConfig(
+                embedding_model="deterministic-test-v1"
+            ),
+        ),
+    )
+
+    completed = ThreadState.model_validate(result["thread"])
+    assert completed.summary == rebuilt_summary
+    assert [record.turn_id for record in completed.turn_records] == [
+        "turn-3",
+        "turn-4",
+    ]
+    assert completed.turn_records[-1].outcome is TurnOutcome.ANSWERED
+    assert "SUMMARY_SCOPE_CANARY" not in completed.model_dump_json()
+    assert "SUMMARY_SCOPE_CANARY" in str(context_model.inputs[0])
+    assert "SUMMARY_SCOPE_CANARY" not in str(context_model.inputs[2])
+    assert "DISCARDED_AFTER_COMPACTION" not in completed.model_dump_json()
+
+
+def test_second_change_rolls_back_recompacted_thread_before_failure(
+    database_pool: ConnectionPool,
+    retrieval_pool: ConnectionPool,
+) -> None:
+    load_reference_snapshot(database_pool)
+    dependency = _finance_dependency(database_pool)
+    records = list(_long_thread().turn_records)
+    records[0] = records[0].model_copy(
+        update={"citation_dependencies": (dependency,)}
+    )
+    thread = ThreadState(principal_id="alice", turn_records=tuple(records))
+    config = RuntimeContext(principal_id="alice").contextualization_config
+    context_model = DeterministicContextModel(
+        responses=[
+            _topic_summary(config.model_id, "FIRST_SUMMARY_CANARY"),
+            _standalone_rewrite("What changed next?"),
+            _topic_summary(config.model_id, "SECOND_STALE_SUMMARY_CANARY"),
+            _standalone_rewrite("What changed next?"),
+        ]
+    )
+
+    def second_scope_change() -> ResearchPlan:
+        with database_pool.connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO access_grants (
+                    knowledge_source, document_id, grant_type, principal_id
+                ) VALUES (%s, %s, 'principal', 'alice')
+                """,
+                (dependency.knowledge_source.value, dependency.document_id),
+            )
+        return ResearchPlan(
+            action=PlanAction.DIRECT,
+            terminal_reason=PlanTerminalReason.GREETING,
+        )
+
+    research_model = DeterministicContextModel(
+        responses=[
+            _research_plan(),
+            EvidenceAssessment(sufficient=True),
+            second_scope_change,
+        ]
+    )
+
+    def first_scope_change() -> VerificationDecision:
+        with database_pool.connection() as connection:
+            connection.execute(
+                """
+                DELETE FROM access_grants
+                WHERE grant_type = 'principal' AND principal_id = 'alice'
+                  AND document_id = %s
+                """,
+                (dependency.document_id,),
+            )
+        return VerificationDecision(supported=True)
+
+    answer_model = DeterministicContextModel(
+        responses=[
+            _answer_draft("DISCARDED_BEFORE_SECOND_CHANGE"),
+            first_scope_change,
+        ]
+    )
+    result = build_turn_graph().invoke(
+        {
+            "thread": thread,
+            "current_turn": {
+                "turn_id": "turn-4",
+                "user_message": "What changed next?",
+            },
+        },
+        context=RuntimeContext(
+            principal_id="alice",
+            database_pool=retrieval_pool,
+            contextualization_model=context_model,
+            research_model=research_model,
+            answer_model=answer_model,
+            embedder=FixtureEmbedder(),
+            reranker=_rerank_all,
+            retrieval_config=RetrievalConfig(
+                embedding_model="deterministic-test-v1"
+            ),
+        ),
+    )
+
+    completed = ThreadState.model_validate(result["thread"])
+    serialized = completed.model_dump_json()
+    assert completed.summary is None
+    assert [record.turn_id for record in completed.turn_records] == [
+        "turn-1",
+        "turn-2",
+        "turn-3",
+        "turn-4",
+    ]
+    assert completed.turn_records[-1].outcome is TurnOutcome.FAILED
+    assert completed.turn_records[-1].terminal_reason == (
+        "authorization_changed_twice"
+    )
+    assert "FIRST_SUMMARY_CANARY" not in serialized
+    assert "SECOND_STALE_SUMMARY_CANARY" not in serialized
+    assert "DISCARDED_BEFORE_SECOND_CHANGE" not in serialized
+
+
 def test_authorized_projection_keeps_only_a_contiguous_newest_suffix(
     retrieval_pool: ConnectionPool,
 ) -> None:
@@ -817,3 +1287,133 @@ def _finance_dependency(pool: ConnectionPool) -> CitationDependency:
         source_revision=str(row[1]),
         source_locator=SourceLocator(section_path=("Confidential impact",)),
     )
+
+
+def _research_plan() -> ResearchPlan:
+    return ResearchPlan(
+        action=PlanAction.RETRIEVE,
+        query="rollback failure",
+        knowledge_sources=(KnowledgeSource.ENGINEERING_DOCS,),
+    )
+
+
+def _answer_draft(text: str) -> CitationDraft:
+    return CitationDraft(
+        disposition=DraftDisposition.FACTUAL,
+        claims=(DraftClaim(text=text, citation_keys=("E1",)),),
+    )
+
+
+def _clarification_rewrite() -> ContextualRewrite:
+    return ContextualRewrite(
+        standalone_question="Did the rollback happen in the referenced place?",
+        depends_on_history=True,
+        referenced_turn_ids=("turn-1",),
+        clarification_needed=True,
+        ambiguity_reason="The place is ambiguous.",
+    )
+
+
+def _standalone_rewrite(question: str) -> ContextualRewrite:
+    return ContextualRewrite(
+        standalone_question=question,
+        depends_on_history=False,
+        referenced_turn_ids=(),
+        clarification_needed=False,
+    )
+
+
+def _topic_summary(model_id: str, text: str) -> ConversationSummary:
+    return ConversationSummary(
+        model_version=model_id,
+        items=(
+            SummaryItem(
+                kind=SummaryItemKind.TOPIC,
+                text=text,
+                source_turn_ids=("turn-1", "turn-2"),
+            ),
+        ),
+        covered_through_turn_id="turn-2",
+    )
+
+
+def _full_turn_context(
+    pool: ConnectionPool,
+    research_model: BaseChatModel,
+    answer_model: BaseChatModel,
+) -> RuntimeContext:
+    return RuntimeContext(
+        principal_id="bob",
+        database_pool=pool,
+        research_model=research_model,
+        answer_model=answer_model,
+        embedder=FixtureEmbedder(),
+        reranker=_rerank_all,
+        retrieval_config=RetrievalConfig(
+            embedding_model="deterministic-test-v1"
+        ),
+    )
+
+
+def _rerank_all(
+    _query: str, candidates: tuple[RerankCandidate, ...]
+) -> RerankOutput:
+    return RerankOutput(
+        items=tuple(
+            RerankItem(
+                chunk_id=candidate.chunk_id,
+                score=1 - index / (2 * len(candidates)),
+            )
+            for index, candidate in enumerate(candidates)
+        )
+    )
+
+
+def _rerank_private_first(
+    _query: str, candidates: tuple[RerankCandidate, ...]
+) -> RerankOutput:
+    ordered = sorted(
+        candidates,
+        key=lambda candidate: (
+            candidate.source_path != "payments/rollback-worker-compatibility.md",
+            candidate.chunk_id,
+        ),
+    )
+    return RerankOutput(
+        items=tuple(
+            RerankItem(
+                chunk_id=candidate.chunk_id,
+                score=1 - index / (2 * len(ordered)),
+            )
+            for index, candidate in enumerate(ordered)
+        )
+    )
+
+
+def _grant_unrelated_document(
+    pool: ConnectionPool, principal_id: str
+) -> tuple[str, str]:
+    with pool.connection() as connection:
+        row = connection.execute(
+            """
+            SELECT knowledge_source, document_id
+            FROM source_documents
+            WHERE NOT source_document_is_authorized(
+                %s, knowledge_source, document_id
+            )
+            ORDER BY knowledge_source, document_id
+            LIMIT 1
+            """,
+            (principal_id,),
+        ).fetchone()
+        assert row is not None
+        identity = (str(row[0]), str(row[1]))
+        connection.execute(
+            """
+            INSERT INTO access_grants (
+                knowledge_source, document_id, grant_type, principal_id
+            ) VALUES (%s, %s, 'principal', %s)
+            """,
+            (*identity, principal_id),
+        )
+    return identity

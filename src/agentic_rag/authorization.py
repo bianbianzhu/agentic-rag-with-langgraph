@@ -28,6 +28,14 @@ class AccessGrantType(StrEnum):
     GROUP = "group"
 
 
+class AuthorizationTransition(StrEnum):
+    """Code-owned final action after current-scope comparison."""
+
+    COMMIT = "commit"
+    RESTART = "restart"
+    FAIL = "fail"
+
+
 class Principal(BaseModel):
     """One trusted Principal and current Group memberships."""
 
@@ -73,6 +81,24 @@ class AuthorizationSnapshot(BaseModel):
 
 class UnknownPrincipalError(ValueError):
     """Trusted Runtime Context named no provisioned Principal."""
+
+
+def decide_authorization_transition(
+    original: AuthorizationSnapshot,
+    current: AuthorizationSnapshot,
+    authorization_restarts: int,
+) -> AuthorizationTransition:
+    """Commit unchanged work, otherwise restart once and then fail closed."""
+
+    if original.principal_id != current.principal_id:
+        raise ValueError("authorization_context_mismatch")
+    if authorization_restarts not in (0, 1):
+        raise ValueError("authorization restart count is invalid")
+    if original.revision == current.revision:
+        return AuthorizationTransition.COMMIT
+    if authorization_restarts == 0:
+        return AuthorizationTransition.RESTART
+    return AuthorizationTransition.FAIL
 
 
 def capture_authorization_snapshot(
