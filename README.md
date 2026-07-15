@@ -151,6 +151,18 @@ graph, State, checkpoint, and lifecycle inspection. The fixed L4 target below
 is the repository's real-model end-to-end composition. An arbitrary-message
 chat runtime is a later application boundary, not a hidden README step.
 
+## Run the static graph prototype
+
+Students can replay the synthetic scenarios without PostgreSQL, model access,
+or API keys:
+
+```bash
+python3 -m http.server 8000 --directory docs/prototype
+```
+
+Open <http://127.0.0.1:8000/>. See the
+[prototype instructions](docs/prototype/README.md) for its scope.
+
 ## Run the live LangSmith evaluation workflow
 
 L4 uses the fixed golden dataset and real OpenAI models:
@@ -259,6 +271,7 @@ fixture.
 | `evals/` | LangSmith dataset, live target, evaluators, reports, and release gates |
 | `tests/` | L1 unit, L2 data, L3 graph, and Agent Server smoke tests |
 | `docs/course/` | Eleven-chapter English course documentation |
+| `docs/prototype/` | Static deterministic graph replay for students |
 
 ## Course path
 

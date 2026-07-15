@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agentic RAG Graph Simulator — Prototype</title>
+  <link rel="stylesheet" href="styles.css?v=layout-3">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">LG</span>
+      <div>
+        <strong>Agentic RAG Graph Simulator</strong>
+        <span>PROTOTYPE · deterministic replay</span>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span class="developer-badge">Developer-only trace</span>
+      <button id="scenarioButton" class="scenario-button" type="button">
+        <span class="eyebrow">Scenario</span>
+        <strong id="scenarioButtonLabel">Happy path</strong>
+        <span aria-hidden="true">⌄</span>
+      </button>
+      <span id="turnBadge" class="turn-badge">Turn 1 / 1</span>
+      <span id="scenarioRiskBadge" class="risk-badge" hidden>Known limitation</span>
+      <button id="restartButton" class="icon-button" type="button" title="Restart scenario">↻</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <section class="panel chat-panel" aria-label="Simulated end-user chat">
+      <div class="panel-header">
+        <div>
+          <span class="eyebrow">Simulated user view</span>
+          <h2>Conversation</h2>
+        </div>
+        <span class="safe-badge">Authorized output only</span>
+      </div>
+      <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
+      <section id="retrievedSection" class="retrieved-section" hidden>
+        <div class="section-heading">
+          <h3>Retrieved documents</h3>
+          <span id="documentCount">0 authorized</span>
+        </div>
+        <div id="documentList" class="document-list"></div>
+      </section>
+      <div class="composer-wrap">
+        <label for="composer">Fixed scenario message</label>
+        <textarea id="composer" rows="3" readonly></textarea>
+        <button id="submitButton" class="primary-button" type="button">Submit</button>
+        <p id="composerHint">This message is fixed by the selected scenario and cannot be edited.</p>
+      </div>
+    </section>
+
+    <section class="panel graph-panel" aria-label="Animated graph">
+      <div class="panel-header graph-header">
+        <div>
+          <span class="eyebrow">Full topology · actual route highlighted</span>
+          <h2>Reference System graph</h2>
+        </div>
+        <div class="graph-legend" aria-label="Node legend">
+          <span><i class="legend-dot agent"></i>Agent</span>
+          <span><i class="legend-dot component"></i>Component</span>
+          <span><i class="legend-dot gate"></i>Gate</span>
+          <span><i class="legend-dot terminal"></i>Terminal</span>
+        </div>
+      </div>
+      <div class="graph-viewport">
+        <svg id="graphSvg" viewBox="0 0 1400 720" role="img" aria-label="Reference System state graph"></svg>
+      </div>
+      <div class="playback">
+        <button id="stepBackButton" class="control-button" type="button" title="Step back">‹</button>
+        <button id="playButton" class="control-button play-button" type="button" title="Play or pause">▶</button>
+        <button id="stepForwardButton" class="control-button" type="button" title="Step forward">›</button>
+        <input id="timeline" type="range" min="0" max="1" value="0" aria-label="Transition timeline">
+        <span id="stepLabel" class="step-label">Ready</span>
+        <label class="speed-label">Speed
+          <select id="speedSelect">
+            <option value="1600">0.5×</option>
+            <option value="800" selected>1×</option>
+            <option value="400">2×</option>
+          </select>
+        </label>
+        <div class="zoom-controls" aria-label="Graph zoom controls">
+          <button id="zoomOutButton" class="control-button" type="button" title="Zoom out">−</button>
+          <span id="zoomLabel">100%</span>
+          <button id="zoomInButton" class="control-button" type="button" title="Zoom in">＋</button>
+        </div>
+        <button id="fitButton" class="control-button text-control" type="button">Fit graph</button>
+      </div>
+    </section>
+
+    <aside class="panel inspector-panel" aria-label="Developer inspector">
+      <div class="panel-header inspector-header">
+        <div>
+          <span class="eyebrow">Developer-only</span>
+          <h2 id="inspectorTitle">Context Gate</h2>
+        </div>
+        <span id="nodeTypeBadge" class="node-type-badge gate">Gate</span>
+      </div>
+      <nav class="inspector-tabs" aria-label="Inspector views">
+        <button class="inspector-tab active" data-tab="detail" type="button">Detail</button>
+        <button class="inspector-tab" data-tab="contract" type="button">Contract</button>
+        <button class="inspector-tab" data-tab="diff" type="button">State diff</button>
+        <button class="inspector-tab" data-tab="json" type="button">Raw JSON</button>
+      </nav>
+      <div id="inspectorContent" class="inspector-content"></div>
+    </aside>
+  </main>
+
+  <div id="scenarioModal" class="modal-backdrop" hidden>
+    <section class="scenario-modal" role="dialog" aria-modal="true" aria-labelledby="scenarioModalTitle">
+      <div class="modal-header">
+        <div>
+          <span class="eyebrow">Deterministic fixtures</span>
+          <h2 id="scenarioModalTitle">Scenario Library</h2>
+        </div>
+        <button id="closeScenarioModal" class="icon-button" type="button" aria-label="Close">×</button>
+      </div>
+      <div id="scenarioGroups" class="scenario-groups"></div>
+    </section>
+  </div>
+
+  <aside id="evidenceDrawer" class="evidence-drawer" aria-hidden="true">
+    <div class="drawer-header">
+      <div>
+        <span class="eyebrow">Authorized Evidence</span>
+        <h2 id="drawerTitle">Evidence</h2>
+      </div>
+      <button id="closeEvidenceDrawer" class="icon-button" type="button" aria-label="Close evidence">×</button>
+    </div>
+    <div id="drawerContent" class="drawer-content"></div>
+  </aside>
+
+  <script src="app.js?v=layout-3" defer></script>
+</body>
+</html>
