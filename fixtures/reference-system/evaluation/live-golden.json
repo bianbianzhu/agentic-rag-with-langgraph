@@ -146,7 +146,7 @@
     "turns": [
       {
         "turn_id": "finance-authorized-1",
-        "user_message": "What was the confidential settlement impact?",
+        "user_message": "For the confidential settlement impact, how many merchants and how much money were affected, and for how long?",
         "expected": {
           "outcome": "answered",
           "terminal_reason": null,

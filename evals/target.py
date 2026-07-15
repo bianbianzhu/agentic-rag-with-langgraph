@@ -37,7 +37,12 @@ from evals.contracts import (
     TargetCommand,
     TargetOutput,
 )
-from evals.config import CHAT_MODEL_ID, EMBEDDING_MODEL_ID, RERANKER_MODEL_ID
+from evals.config import (
+    CHAT_MODEL_ID,
+    EMBEDDING_MODEL_ID,
+    MODEL_TEMPERATURE,
+    RERANKER_MODEL_ID,
+)
 from evals.dataset import validate_target_command
 from evals.fixtures import prepare_live_fixture, resolve_all_evidence_aliases
 
@@ -255,8 +260,14 @@ def open_live_target() -> Iterator[LiveTarget]:
         )
     )
     try:
-        chat_model = init_chat_model(CHAT_MODEL_ID)
-        reranker_model = init_chat_model(RERANKER_MODEL_ID)
+        chat_model = init_chat_model(
+            CHAT_MODEL_ID,
+            temperature=MODEL_TEMPERATURE,
+        )
+        reranker_model = init_chat_model(
+            RERANKER_MODEL_ID,
+            temperature=MODEL_TEMPERATURE,
+        )
         embedder = init_embeddings(EMBEDDING_MODEL_ID)
         yield LiveTarget(
             write_pool=write_pool,

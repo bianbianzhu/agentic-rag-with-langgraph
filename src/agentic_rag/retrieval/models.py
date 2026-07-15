@@ -164,7 +164,7 @@ class RetrievalConfig(BaseModel):
     reranker_model: Literal["openai:gpt-5.4-nano-2026-03-17"] = (
         "openai:gpt-5.4-nano-2026-03-17"
     )
-    reranker_prompt_version: Literal["listwise-v1"] = "listwise-v1"
+    reranker_prompt_version: Literal["listwise-v2"] = "listwise-v2"
     relevance_threshold: float = Field(default=0.5, ge=0, le=1)
     context_window: int = Field(default=1, ge=0, le=3)
     evidence_token_limit: int = Field(default=6_000, ge=1, le=6_000)

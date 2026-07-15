@@ -6,7 +6,7 @@
   "turns": [
     {
       "turn_id": "refine-1",
-      "user_message": "Which legacy worker version was incompatible with schema v2?",
+      "user_message": "First search for the exact phrase 'empty legacy query'. If that evidence is insufficient, find which legacy worker version was incompatible with schema v2.",
       "expected": {
         "outcome": "answered",
         "terminal_reason": null,

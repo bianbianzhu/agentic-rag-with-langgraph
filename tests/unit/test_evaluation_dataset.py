@@ -57,12 +57,23 @@ def test_golden_examples_keep_commands_references_and_metadata_separate() -> Non
         if scenario_id != "poisoned_fact"
     )
     assert finance.inputs.fixture_setup.principal_id == "carol"
+    assert finance.inputs.turns[0].user_message == (
+        "For the confidential settlement impact, how many merchants and how "
+        "much money were affected, and for how long?"
+    )
     assert finance.reference_outputs.turns[0].expected_evidence_aliases == (
         "D8#settlement-impact",
     )
     assert finance.reference_outputs.turns[0].required_claims[0].fact_id == "F5"
     assert set(examples["greeting"].metadata.applicable_evaluators).isdisjoint(
         {"answer_correctness", "groundedness", "citation_entailment"}
+    )
+    assert examples["refine"].inputs.turns[0].user_message.startswith(
+        "First search for the exact phrase 'empty legacy query'."
+    )
+    assert examples["multi_turn"].inputs.turns[1].user_message == (
+        "For the payments rollback we just discussed, did staging fail for "
+        "the same reason or for a different one?"
     )
     assert "payments/rollback-recovery.md" in (
         finance.reference_outputs.turns[0].forbidden_disclosures
@@ -108,6 +119,7 @@ class RecordingClient:
         self.created_examples: list[dict[str, object]] = []
         self.splits: dict[str, list[UUID]] = {}
         self.tags: list[tuple[str, str]] = []
+        self.updated_examples: list[UUID] = []
 
     def has_dataset(self, *, dataset_name: str) -> bool:
         assert dataset_name == DATASET_NAME
@@ -120,6 +132,12 @@ class RecordingClient:
     def create_examples(self, *, dataset_id: str, examples: list[dict[str, object]]):
         assert dataset_id == "dataset-1"
         self.created_examples = examples
+
+    def list_examples(self, **kwargs: object):
+        return iter(())
+
+    def update_example(self, example_id: UUID, **kwargs: object) -> None:
+        self.updated_examples.append(example_id)
 
     def update_dataset_splits(
         self,
@@ -171,3 +189,21 @@ def test_publish_creates_an_untagged_candidate_then_acceptance_tags_exact_versio
 
     assert result.dataset_tag == DATASET_TAG
     assert client.tags[0][1] == DATASET_TAG
+
+
+def test_publish_updates_existing_fixed_id_examples_instead_of_conflicting() -> None:
+    client = RecordingClient()
+    client.has_dataset = lambda **kwargs: True  # type: ignore[method-assign]
+    client.read_dataset = lambda **kwargs: type(  # type: ignore[attr-defined]
+        "Dataset", (), {"id": "dataset-1"}
+    )()
+    existing_ids = [example.example_id for example in build_golden_examples()]
+    client.list_examples = lambda **kwargs: iter(  # type: ignore[method-assign]
+        type("Example", (), {"id": example_id})()
+        for example_id in existing_ids
+    )
+
+    publish_golden_candidate(client)
+
+    assert client.created_examples == []
+    assert client.updated_examples == existing_ids

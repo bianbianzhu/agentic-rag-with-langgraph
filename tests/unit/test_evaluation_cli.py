@@ -10,12 +10,29 @@ import langsmith as ls
 import pytest
 
 from evals.run import (
+    _evaluate,
     _dataset_tag_for_version,
     _read_baseline,
     _require_current_release_tag,
     build_experiment_metadata,
     main,
 )
+
+
+def test_live_evaluation_serializes_shared_fixture_runs() -> None:
+    client = SimpleNamespace(evaluate=lambda *args, **kwargs: kwargs)
+
+    result = _evaluate(
+        cast(Any, client),
+        cast(Any, object()),
+        [],
+        [],
+        metadata={},
+        prefix="candidate",
+    )
+
+    assert result["max_concurrency"] == 1
+    assert result["num_repetitions"] == 3
 
 
 def test_preview_is_local_and_describes_the_frozen_dataset(capsys: pytest.CaptureFixture[str]) -> None:
@@ -78,6 +95,7 @@ def test_experiment_metadata_records_reproducible_configuration() -> None:
     assert metadata["dataset_tag"] == "release-v1"
     assert metadata["dataset_version"] == "2026-07-15T00:00:00+00:00"
     assert metadata["git_sha"] == "abc123"
+    assert metadata["model_parameters"] == {"temperature": 0}
     assert metadata["corpus_revisions"] == {
         "s1-baseline": {"engineering-docs": "corpus-1"}
     }

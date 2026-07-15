@@ -1,5 +1,8 @@
 """L1 contracts and routes for bounded research."""
 
+import json
+from unittest.mock import Mock
+
 import pytest
 from pydantic import ValidationError
 
@@ -10,6 +13,8 @@ from agentic_rag.agents.research import (
     QueryRefinement,
     ResearchAgentConfig,
     ResearchPlan,
+    assess_evidence,
+    create_research_plan,
 )
 from agentic_rag.corpus import KnowledgeSource
 from agentic_rag.graph.nodes import (
@@ -63,6 +68,52 @@ def test_terminal_plan_requires_matching_structured_reason() -> None:
     )
     assert plan.query is None
     assert plan.knowledge_sources == ()
+
+
+def test_live_plan_prompt_declares_action_fields_and_source_scope() -> None:
+    model = Mock()
+    model.with_structured_output.return_value.invoke.return_value = ResearchPlan(
+        action=PlanAction.RETRIEVE,
+        query="settlement impact",
+        knowledge_sources=(KnowledgeSource.OPERATIONAL_RUNBOOKS,),
+    )
+
+    create_research_plan(
+        model,
+        "What was the confidential settlement impact?",
+        ResearchAgentConfig(),
+    )
+
+    messages = model.with_structured_output.return_value.invoke.call_args.args[0]
+    system_prompt = messages[0][1]
+    assert "For retrieve:" in system_prompt
+    assert "For direct, clarification, or refusal:" in system_prompt
+    assert "settlement" in system_prompt
+    assert "merchants, amount, delay, and duration" in system_prompt
+    assert "explicit first search phrase" in system_prompt
+    assert "operational-runbooks" in system_prompt
+    assert "settlement impact or status" in system_prompt
+
+
+def test_evidence_assessment_receives_the_active_search_stage() -> None:
+    model = Mock()
+    model.with_structured_output.return_value.invoke.return_value = (
+        EvidenceAssessment(sufficient=False)
+    )
+
+    assess_evidence(
+        model,
+        "First search for the exact phrase 'empty legacy query'.",
+        "empty legacy query",
+        (),
+        ResearchAgentConfig(),
+    )
+
+    messages = model.with_structured_output.return_value.invoke.call_args.args[0]
+    system_prompt = messages[0][1]
+    payload = json.loads(messages[1][1])
+    assert "ordered first search" in system_prompt
+    assert payload["active_query"] == "empty legacy query"
 
 
 def test_research_decisions_are_strict_and_bounded() -> None:

@@ -78,7 +78,10 @@ class DeterministicResearchModel(BaseChatModel):
         def next_response(_: object) -> Any:
             if not self.responses:
                 raise AssertionError("unexpected model call")
-            return self.responses.pop(0)
+            response = self.responses.pop(0)
+            if isinstance(response, Exception):
+                raise response
+            return response
 
         return RunnableLambda(next_response)
 
@@ -155,6 +158,29 @@ def test_research_graph_returns_real_authorized_evidence(
     }
     assert result["evidence_set"]["complete"] is True
     assert result["evidence_set"]["evidence_items"]
+
+
+def test_research_graph_retries_one_malformed_plan_within_budget(
+    research_input: tuple[ResearchGraphState, RuntimeContext],
+) -> None:
+    state, base_context = research_input
+    model = DeterministicResearchModel(
+        responses=[
+            ValueError("malformed structured output"),
+            _plan("rollback failure"),
+            EvidenceAssessment(sufficient=True),
+        ]
+    )
+
+    result = _invoke(state, base_context, model)
+
+    assert result["status"] == "evidence_ready"
+    assert result["counters"] == {
+        "model_calls": 4,
+        "retrieval_requests": 1,
+        "research_iterations": 0,
+    }
+    assert model.requested_schemas[:2] == ["ResearchPlan", "ResearchPlan"]
 
 
 def test_research_graph_refines_once_then_succeeds(

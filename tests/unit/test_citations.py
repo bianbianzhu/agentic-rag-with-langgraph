@@ -1,5 +1,7 @@
 """L1 deterministic citation-contract verification."""
 
+from unittest.mock import Mock
+
 import pytest
 from pydantic import ValidationError
 
@@ -14,6 +16,7 @@ from agentic_rag.citations import (
     render_cited_answer,
     validate_citation_draft,
 )
+from agentic_rag.agents.answering import generate_answer_draft
 from agentic_rag.corpus import KnowledgeSource
 from agentic_rag.corpus.models import SourceLocator
 from agentic_rag.retrieval import EvidenceItem, RetrievalProvenance
@@ -79,6 +82,30 @@ def test_refusal_requires_a_structured_reason() -> None:
         refusal_reason=RefusalReason.INSUFFICIENT_EVIDENCE,
     )
     assert valid.claims == ()
+
+
+def test_live_answer_prompt_declares_exact_disposition_fields() -> None:
+    evidence = (_evidence("chunk-1"),)
+    mappings = citation_mappings(evidence)
+    model = Mock()
+    model.with_structured_output.return_value.invoke.return_value = (
+        _factual_draft("E1")
+    )
+
+    generate_answer_draft(
+        model,
+        "Why did rollback fail?",
+        evidence,
+        mappings,
+    )
+
+    messages = model.with_structured_output.return_value.invoke.call_args.args[0]
+    system_prompt = messages[0][1]
+    assert "For factual:" in system_prompt
+    assert "response_text=null" in system_prompt
+    assert "refusal_reason=null" in system_prompt
+    assert "For refusal or insufficient:" in system_prompt
+    assert "supports a negative or different answer" in system_prompt
 
 
 def test_only_valid_verified_factual_draft_renders_to_user_projection() -> None:

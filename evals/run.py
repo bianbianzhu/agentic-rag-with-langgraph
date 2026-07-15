@@ -21,6 +21,7 @@ from evals.config import (
     CHAT_MODEL_ID,
     EMBEDDING_MODEL_ID,
     LIVE_PROCESSING_CONFIG,
+    MODEL_TEMPERATURE,
     RERANKER_MODEL_ID,
 )
 from evals.dataset import (
@@ -80,16 +81,19 @@ def build_experiment_metadata(
 
     return {
         "models": [CHAT_MODEL_ID, RERANKER_MODEL_ID, EMBEDDING_MODEL_ID],
+        "model_parameters": {"temperature": MODEL_TEMPERATURE},
         "prompts": [
-            "contextual-rewrite-prompt-v1",
+            "contextual-rewrite-prompt-v2",
             "conversation-summary-prompt-v1",
-            "research-plan-prompt-v1",
-            "evidence-assessment-prompt-v1",
+            "research-plan-prompt-v2",
+            "evidence-assessment-prompt-v2",
             "query-refinement-prompt-v1",
-            "answer-generation-v1",
+            "answer-generation-v2",
             "answer-verification-v1",
-            "listwise-v1",
+            "listwise-v2",
             "openevals-0.2.0",
+            "route-quality-judge-v1",
+            "forbidden-claim-judge-v2",
         ],
         "tools": [
             {
@@ -395,7 +399,9 @@ def _evaluate(
         evaluators=evaluators,
         metadata=metadata,
         experiment_prefix=prefix,
-        max_concurrency=0,
+        # Every target Run resets the same PostgreSQL fixture. Serial execution
+        # prevents overlays and grant mutations from leaking across examples.
+        max_concurrency=1,
         num_repetitions=3,
         error_handling="log",
     )

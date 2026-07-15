@@ -129,6 +129,8 @@ def test_contextual_rewrite_can_reference_a_compacted_summary_turn() -> None:
     )
 
     assert rewrite.referenced_turn_ids == ("turn-compacted",)
+    messages = model.with_structured_output.return_value.invoke.call_args.args[0]
+    assert "exactly one prior topic or event" in messages[0][1]
 
 
 def test_compaction_replaces_only_an_oldest_complete_turn_prefix() -> None:

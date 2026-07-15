@@ -778,7 +778,19 @@ def plan_research(
             model, state["question"], runtime.context.research_config
         )
     except Exception:
-        return _research_terminal("failed", "planning_failed", counters)
+        retry_state = state.copy()
+        retry_state["counters"] = counters.model_dump(mode="json")
+        counters, terminal = _consume_research_operation(
+            retry_state, runtime, "model_calls"
+        )
+        if terminal is not None:
+            return terminal
+        try:
+            plan = create_research_plan(
+                model, state["question"], runtime.context.research_config
+            )
+        except Exception:
+            return _research_terminal("failed", "planning_failed", counters)
     if _research_deadline_exceeded(runtime.context):
         return _research_terminal(
             "incomplete", "deadline_exceeded", counters
@@ -946,6 +958,7 @@ def assess_research_evidence(
         assessment = assess_evidence(
             model,
             state["question"],
+            str(_required(state.get("active_query"), "active_query")),
             evidence_set.evidence_items,
             runtime.context.research_config,
         )

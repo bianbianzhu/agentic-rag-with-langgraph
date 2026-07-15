@@ -34,8 +34,8 @@ class ContextualizationConfig(BaseModel):
     model_id: Literal["openai:gpt-5.4-mini-2026-03-17"] = (
         "openai:gpt-5.4-mini-2026-03-17"
     )
-    prompt_version: Literal["contextual-rewrite-prompt-v1"] = (
-        "contextual-rewrite-prompt-v1"
+    prompt_version: Literal["contextual-rewrite-prompt-v2"] = (
+        "contextual-rewrite-prompt-v2"
     )
     schema_version: Literal["contextual-rewrite-schema-v1"] = (
         "contextual-rewrite-schema-v1"
@@ -101,7 +101,12 @@ def rewrite_question(
                 "only the supplied authorized Thread context. Do not answer, "
                 "add facts, or change user constraints. Preserve standalone "
                 "questions and clear topic changes. Ask for clarification when "
-                "the reference is ambiguous. Return no reasoning text.",
+                "the reference is genuinely ambiguous. When authorized context "
+                "contains exactly one prior topic or event, references such as "
+                "it, there, that, or the same thing are unambiguous: rewrite "
+                "them using that Turn, set depends_on_history=true, include its "
+                "turn_id, and do not ask for clarification. Return no reasoning "
+                "text.",
             ),
             (
                 "human",

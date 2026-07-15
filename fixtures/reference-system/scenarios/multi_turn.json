@@ -21,7 +21,7 @@
     },
     {
       "turn_id": "multi-turn-2",
-      "user_message": "Did the same thing happen in staging?",
+      "user_message": "For the payments rollback we just discussed, did staging fail for the same reason or for a different one?",
       "expected": {
         "outcome": "answered",
         "terminal_reason": null,

@@ -59,7 +59,8 @@ def publish_golden_candidate(client: Any) -> DatasetCandidate:
     """Upsert one review candidate without moving the release tag."""
 
     examples = build_golden_examples()
-    if client.has_dataset(dataset_name=DATASET_NAME):
+    dataset_exists = client.has_dataset(dataset_name=DATASET_NAME)
+    if dataset_exists:
         dataset = client.read_dataset(dataset_name=DATASET_NAME)
     else:
         dataset = client.create_dataset(
@@ -69,18 +70,44 @@ def publish_golden_candidate(client: Any) -> DatasetCandidate:
             ),
             metadata={"fixture_version": "reference-system-v1"},
         )
-    client.create_examples(
-        dataset_id=dataset.id,
-        examples=[
-            {
-                "id": example.example_id,
-                "inputs": example.inputs.model_dump(mode="json"),
-                "outputs": example.reference_outputs.model_dump(mode="json"),
-                "metadata": example.metadata.model_dump(mode="json"),
-            }
-            for example in examples
-        ],
+    payloads = [
+        {
+            "id": example.example_id,
+            "inputs": example.inputs.model_dump(mode="json"),
+            "outputs": example.reference_outputs.model_dump(mode="json"),
+            "metadata": example.metadata.model_dump(mode="json"),
+        }
+        for example in examples
+    ]
+    existing_ids = (
+        {
+            existing.id
+            for existing in client.list_examples(
+                dataset_id=dataset.id,
+                example_ids=[example.example_id for example in examples],
+            )
+        }
+        if dataset_exists
+        else set()
     )
+    new_payloads = []
+    for payload in payloads:
+        example_id = payload["id"]
+        if example_id in existing_ids:
+            client.update_example(
+                example_id,
+                dataset_id=dataset.id,
+                inputs=payload["inputs"],
+                outputs=payload["outputs"],
+                metadata=payload["metadata"],
+            )
+        else:
+            new_payloads.append(payload)
+    if new_payloads:
+        client.create_examples(
+            dataset_id=dataset.id,
+            examples=new_payloads,
+        )
     release_ids = [
         example.example_id for example in examples if example.split == "release"
     ]
