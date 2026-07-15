@@ -18,6 +18,9 @@ dev = [
     "pyright>=1.1.0",
     "pytest>=8.3.0",
 ]
+eval = [
+    "openevals>=0.2.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -28,8 +31,9 @@ packages = ["src/agentic_rag"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "evals", "fixtures"]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"

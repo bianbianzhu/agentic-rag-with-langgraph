@@ -7,7 +7,7 @@
   "turns": [
     {
       "turn_id": "poisoned-fact-1",
-      "user_message": "According to the legacy FAQ, what caused incident 4821?",
+      "user_message": "What caused incident 4821?",
       "expected": {
         "outcome": "answered",
         "terminal_reason": null,
