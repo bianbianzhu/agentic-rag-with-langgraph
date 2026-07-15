@@ -70,15 +70,23 @@ def test_agent_server_reuses_thread_for_two_turns() -> None:
             thread_id,
             "engineering_assistant",
             input={
-                "thread": {"completed_turns": 0},
-                "current_turn": {"user_message": "First Turn"},
+                "thread": {},
+                "current_turn": {
+                    "turn_id": "turn-1",
+                    "user_message": "First Turn",
+                },
             },
             context={"principal_id": "alice"},
         )
         second_result = client.runs.wait(
             thread_id,
             "engineering_assistant",
-            input={"current_turn": {"user_message": "Second Turn"}},
+            input={
+                "current_turn": {
+                    "turn_id": "turn-2",
+                    "user_message": "Second Turn",
+                }
+            },
             context={"principal_id": "alice"},
         )
         final_state = client.threads.get_state(thread_id)
@@ -86,9 +94,9 @@ def test_agent_server_reuses_thread_for_two_turns() -> None:
         assert isinstance(second_result, dict)
         assert isinstance(final_state, dict)
         assert isinstance(final_state["values"], dict)
-        assert second_result["thread"] == {"completed_turns": 2}
-        assert final_state["values"]["thread"] == {"completed_turns": 2}
-        assert final_state["values"]["current_turn"]["user_message"] == "Second Turn"
+        assert len(second_result["thread"]["turn_records"]) == 2
+        assert len(final_state["values"]["thread"]["turn_records"]) == 2
+        assert final_state["values"]["current_turn"] is None
     finally:
         process.terminate()
         try:

@@ -2,12 +2,14 @@
 
 from langgraph.graph import END
 from langgraph.runtime import Runtime
+from pydantic import ValidationError
 
 from agentic_rag.agents.answering import (
     VerificationDecision,
     generate_answer_draft,
     verify_answer_draft,
 )
+from agentic_rag.agents.contextualization import rewrite_question, summarize_turns
 from agentic_rag.agents.research import (
     EvidenceAssessment,
     PlanAction,
@@ -17,7 +19,10 @@ from agentic_rag.agents.research import (
     create_research_plan,
     refine_research_query,
 )
-from agentic_rag.authorization import AuthorizationSnapshot
+from agentic_rag.authorization import (
+    AuthorizationSnapshot,
+    capture_authorization_snapshot,
+)
 from agentic_rag.citations import (
     CitationDraft,
     CitationHydrationError,
@@ -28,7 +33,20 @@ from agentic_rag.citations import (
     render_cited_answer,
     validate_citation_draft,
 )
-from agentic_rag.conversation import ThreadState
+from agentic_rag.conversation import (
+    ThreadState,
+    TurnOutcome,
+    TurnRecord,
+    TurnResumeIncompatibleError,
+    active_thread_memory_tokens,
+    begin_turn,
+    compact_thread_memory,
+    commit_turn,
+    oldest_compaction_prefix,
+    project_authorized_thread_context,
+    project_authorized_summary_items,
+    project_authorized_turn_record,
+)
 from agentic_rag.corpus import KnowledgeSource
 from agentic_rag.graph.state import (
     AnswerGraphState,
@@ -50,29 +68,364 @@ from agentic_rag.retrieval.evidence import expand_evidence_set_context
 from agentic_rag.runtime import RuntimeContext
 
 
-def complete_turn(
+def prepare_turn(
     state: GraphState, runtime: Runtime[RuntimeContext]
-) -> dict[str, dict[str, object]]:
-    """Complete the deterministic Chapter 01 Turn."""
+) -> dict[str, object]:
+    """Checkpoint a trusted, resume-compatible active Turn boundary."""
 
     raw_current_turn = state["current_turn"]
     if raw_current_turn is None:
         raise ValueError("current_turn is required")
+    try:
+        current_turn = CurrentTurnWork.model_validate(raw_current_turn)
+        thread = ThreadState.model_validate(state["thread"])
+    except ValidationError as error:
+        raise TurnResumeIncompatibleError(
+            "turn_resume_incompatible"
+        ) from error
+    was_active = thread.active_turn_id is not None
+    if was_active and current_turn.stage == "new":
+        raise TurnResumeIncompatibleError("turn_resume_incompatible")
+    if not was_active:
+        current_turn = CurrentTurnWork(
+            turn_id=current_turn.turn_id,
+            user_message=current_turn.user_message,
+            stage="prepared",
+        )
+    started = begin_turn(
+        thread,
+        runtime.context.principal_id,
+        current_turn.turn_id,
+        input_fingerprint=current_turn.resume_fingerprint(),
+    )
+    if any(
+        record.turn_id == current_turn.turn_id
+        for record in started.turn_records
+    ):
+        return {"thread": started.model_dump(mode="json"), "current_turn": None}
+    return {
+        "thread": started.model_dump(mode="json"),
+        "current_turn": current_turn.model_dump(mode="json"),
+    }
 
+
+def route_after_prepare(state: GraphState) -> str:
+    return _route_current_turn(state, allow_end=True)
+
+
+def _route_current_turn(state: GraphState, *, allow_end: bool) -> str:
+    raw_current_turn = state["current_turn"]
+    if raw_current_turn is None:
+        if allow_end:
+            return "end"
+        raise ValueError("current_turn is required")
+    current_turn = CurrentTurnWork.model_validate(raw_current_turn)
+    if current_turn.stage == "terminal":
+        return "complete_turn"
+    thread = ThreadState.model_validate(state["thread"])
+    if active_thread_memory_tokens(
+        thread, current_turn.user_message
+    ) > 2_000:
+        return "compact_context"
+    return "contextualize_turn"
+
+
+def compact_context(
+    state: GraphState, runtime: Runtime[RuntimeContext]
+) -> dict[str, object]:
+    """Run one checkpointed, authorized Conversation Summary attempt."""
+
+    raw_current_turn = state["current_turn"]
+    if raw_current_turn is None:
+        raise ValueError("current_turn is required")
     thread = ThreadState.model_validate(state["thread"])
     current_turn = CurrentTurnWork.model_validate(raw_current_turn)
+    config = runtime.context.contextualization_config
+    if current_turn.model_calls >= runtime.context.execution_budget.model_call_limit:
+        return _terminal_work(
+            current_turn,
+            thread,
+            "I could not safely compact the conversation context.",
+            TurnOutcome.FAILED,
+            "model_calls_exhausted",
+        )
+    if _turn_deadline_exceeded(runtime.context):
+        return _terminal_work(
+            current_turn,
+            thread,
+            "I could not safely compact the conversation context.",
+            TurnOutcome.FAILED,
+            "deadline_exceeded",
+        )
+    records_to_compact = oldest_compaction_prefix(
+        thread,
+        current_turn.user_message,
+        token_limit=config.context_token_limit,
+        summary_token_reserve=config.summary_token_limit,
+    )
+    model = runtime.context.contextualization_model
+    pool = runtime.context.database_pool
+    if not records_to_compact or model is None or pool is None:
+        return _terminal_work(
+            current_turn,
+            thread,
+            "I could not safely compact the conversation context.",
+            TurnOutcome.FAILED,
+            "context_compaction_failed",
+        )
 
-    return {
-        "thread": thread.model_copy(
-            update={"completed_turns": thread.completed_turns + 1}
-        ).model_dump(mode="json"),
-        "current_turn": current_turn.model_copy(
+    try:
+        snapshot = capture_authorization_snapshot(
+            pool, runtime.context.principal_id
+        )
+        authorized_records = tuple(
+            project_authorized_turn_record(pool, snapshot, record)
+            for record in records_to_compact
+        )
+        authorized_previous_summary = (
+            thread.summary.model_copy(
+                update={
+                    "items": project_authorized_summary_items(
+                        pool, snapshot, thread.summary
+                    )
+                }
+            )
+            if thread.summary is not None
+            else None
+        )
+        if _turn_deadline_exceeded(runtime.context):
+            return _terminal_work(
+                current_turn,
+                thread,
+                "I could not safely compact the conversation context.",
+                TurnOutcome.FAILED,
+                "deadline_exceeded",
+            )
+        attempts = current_turn.compaction_attempts + 1
+        model_calls = current_turn.model_calls + 1
+        summary = summarize_turns(
+            model,
+            authorized_previous_summary,
+            authorized_records,
+            config,
+        )
+        compacted = compact_thread_memory(
+            thread,
+            summary,
+            tuple(record.turn_id for record in records_to_compact),
+        )
+        if (
+            active_thread_memory_tokens(
+                compacted, current_turn.user_message
+            )
+            > config.context_token_limit
+            or _turn_deadline_exceeded(runtime.context)
+        ):
+            raise ValueError("compacted Thread exceeds its budget")
+    except Exception:
+        attempts = current_turn.compaction_attempts + 1
+        model_calls = current_turn.model_calls + 1
+        updated = current_turn.model_copy(
             update={
-                "assistant_message": "The Reference System development loop is ready.",
-                "status": "answered",
+                "stage": "compacting",
+                "model_calls": model_calls,
+                "compaction_attempts": attempts,
             }
-        ).model_dump(mode="json"),
+        )
+        if attempts < config.summary_retry_limit:
+            return _checkpoint_work(thread, updated)
+        return _terminal_work(
+            updated,
+            thread,
+            "I could not safely compact the conversation context.",
+            TurnOutcome.FAILED,
+            "context_compaction_failed",
+        )
+
+    updated = current_turn.model_copy(
+        update={
+            "stage": "prepared",
+            "model_calls": model_calls,
+            "compaction_attempts": attempts,
+        }
+    )
+    return _checkpoint_work(compacted, updated)
+
+
+def route_after_compaction(state: GraphState) -> str:
+    return _route_current_turn(state, allow_end=False)
+
+
+def contextualize_turn(
+    state: GraphState, runtime: Runtime[RuntimeContext]
+) -> dict[str, object]:
+    """Create one checkpointed Standalone Question or safe terminal."""
+
+    current_turn = CurrentTurnWork.model_validate(state["current_turn"])
+    thread = ThreadState.model_validate(state["thread"])
+    if not thread.turn_records and thread.summary is None:
+        return _terminal_work(
+            current_turn,
+            thread,
+            "The Reference System development loop is ready.",
+            TurnOutcome.ANSWERED,
+            None,
+        )
+    model = runtime.context.contextualization_model
+    pool = runtime.context.database_pool
+    if model is None or pool is None:
+        return _terminal_work(
+            current_turn,
+            thread,
+            "I could not safely resolve the conversation context.",
+            TurnOutcome.FAILED,
+            "contextualization_unavailable",
+        )
+    if current_turn.model_calls >= runtime.context.execution_budget.model_call_limit:
+        return _terminal_work(
+            current_turn,
+            thread,
+            "I could not safely resolve the conversation context.",
+            TurnOutcome.FAILED,
+            "model_calls_exhausted",
+        )
+    if _turn_deadline_exceeded(runtime.context):
+        return _terminal_work(
+            current_turn,
+            thread,
+            "I could not safely resolve the conversation context.",
+            TurnOutcome.FAILED,
+            "deadline_exceeded",
+        )
+
+    try:
+        snapshot = capture_authorization_snapshot(
+            pool, runtime.context.principal_id
+        )
+        authorized_context = project_authorized_thread_context(
+            pool,
+            snapshot,
+            thread,
+            current_user_message=current_turn.user_message,
+        )
+        if _turn_deadline_exceeded(runtime.context):
+            return _terminal_work(
+                current_turn,
+                thread,
+                "I could not safely resolve the conversation context.",
+                TurnOutcome.FAILED,
+                "deadline_exceeded",
+            )
+        model_calls = current_turn.model_calls + 1
+        rewrite = rewrite_question(
+            model,
+            current_turn.user_message,
+            authorized_context,
+            runtime.context.contextualization_config,
+        )
+    except Exception:
+        model_calls = current_turn.model_calls + 1
+        failed = current_turn.model_copy(update={"model_calls": model_calls})
+        return _terminal_work(
+            failed,
+            thread,
+            "I could not safely resolve the conversation context.",
+            TurnOutcome.FAILED,
+            "context_rewrite_failed",
+        )
+    updated = current_turn.model_copy(update={"model_calls": model_calls})
+    if _turn_deadline_exceeded(runtime.context):
+        return _terminal_work(
+            updated,
+            thread,
+            "I could not safely resolve the conversation context.",
+            TurnOutcome.FAILED,
+            "deadline_exceeded",
+        )
+    if rewrite.clarification_needed:
+        return _terminal_work(
+            updated,
+            thread,
+            "Please clarify which earlier system or event you mean.",
+            TurnOutcome.CLARIFICATION_REQUESTED,
+            "clarification_needed",
+            standalone_question=rewrite.standalone_question,
+        )
+    return _terminal_work(
+        updated,
+        thread,
+        "The Reference System development loop is ready.",
+        TurnOutcome.ANSWERED,
+        None,
+        standalone_question=rewrite.standalone_question,
+    )
+
+
+def complete_turn(state: GraphState) -> dict[str, object]:
+    """Atomically append terminal semantic memory and clear disposable work."""
+
+    current_turn = CurrentTurnWork.model_validate(state["current_turn"])
+    thread = ThreadState.model_validate(state["thread"])
+    if current_turn.stage != "terminal":
+        raise ValueError("Current Turn Work is not terminal")
+    if (
+        current_turn.standalone_question is None
+        or current_turn.assistant_message is None
+        or current_turn.outcome is None
+    ):
+        raise ValueError("terminal Current Turn Work is incomplete")
+    record = TurnRecord(
+        turn_id=current_turn.turn_id,
+        user_message=current_turn.user_message,
+        standalone_question=current_turn.standalone_question,
+        assistant_message=current_turn.assistant_message,
+        outcome=current_turn.outcome,
+        terminal_reason=current_turn.terminal_reason,
+    )
+    completed = commit_turn(thread, record)
+    return {
+        "thread": completed.model_dump(mode="json"),
+        "current_turn": None,
     }
+
+
+def _terminal_work(
+    current_turn: CurrentTurnWork,
+    thread: ThreadState,
+    assistant_message: str,
+    outcome: TurnOutcome,
+    terminal_reason: str | None,
+    *,
+    standalone_question: str | None = None,
+) -> dict[str, object]:
+    terminal = current_turn.model_copy(
+        update={
+            "stage": "terminal",
+            "standalone_question": (
+                standalone_question or current_turn.user_message
+            ),
+            "assistant_message": assistant_message,
+            "outcome": outcome,
+            "terminal_reason": terminal_reason,
+        }
+    )
+    return _checkpoint_work(thread, terminal)
+
+
+def _checkpoint_work(
+    thread: ThreadState, current_turn: CurrentTurnWork
+) -> dict[str, object]:
+    checkpointed_thread = thread.model_copy(
+        update={"active_turn_fingerprint": current_turn.resume_fingerprint()}
+    )
+    return {
+        "thread": checkpointed_thread.model_dump(mode="json"),
+        "current_turn": current_turn.model_dump(mode="json"),
+    }
+
+
+def _turn_deadline_exceeded(context: RuntimeContext) -> bool:
+    return context.deadline_at is not None and context.clock() >= context.deadline_at
 
 
 def hydrate_answer_citations(

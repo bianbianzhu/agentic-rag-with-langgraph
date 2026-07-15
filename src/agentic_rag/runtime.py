@@ -13,6 +13,7 @@ from langchain_core.language_models import BaseChatModel
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+from agentic_rag.agents.contextualization import ContextualizationConfig
 from agentic_rag.agents.research import ResearchAgentConfig
 from agentic_rag.retrieval import Reranker, RetrievalConfig
 
@@ -45,11 +46,15 @@ class RuntimeContext:
     principal_id: str
     database_pool: ConnectionPool | None = None
     answer_model: BaseChatModel | None = None
+    contextualization_model: BaseChatModel | None = None
     research_model: BaseChatModel | None = None
     embedder: Embeddings | None = None
     reranker: Reranker | None = None
     retrieval_config: RetrievalConfig | None = None
     research_config: ResearchAgentConfig = ResearchAgentConfig()
+    contextualization_config: ContextualizationConfig = (
+        ContextualizationConfig()
+    )
     execution_budget: TurnExecutionBudget = TurnExecutionBudget()
     clock: Callable[[], float] = monotonic
     deadline_at: float | None = None
