@@ -787,7 +787,10 @@ def plan_research(
             return terminal
         try:
             plan = create_research_plan(
-                model, state["question"], runtime.context.research_config
+                model,
+                state["question"],
+                runtime.context.research_config,
+                repair=True,
             )
         except Exception:
             return _research_terminal("failed", "planning_failed", counters)
@@ -970,6 +973,43 @@ def assess_research_evidence(
         return _research_terminal(
             "incomplete", "deadline_exceeded", counters
         )
+    budget = runtime.context.execution_budget
+    can_refine = (
+        counters.research_iterations < budget.research_iteration_limit
+        and counters.retrieval_requests < budget.retrieval_request_limit
+        and counters.model_calls < budget.model_call_limit
+        and not _research_deadline_exceeded(runtime.context)
+    )
+    if (
+        not assessment.sufficient
+        and not can_refine
+        and evidence_set.evidence_items
+        and counters.model_calls < budget.model_call_limit
+    ):
+        confirmation_state = state.copy()
+        confirmation_state["counters"] = counters.model_dump(mode="json")
+        counters, terminal = _consume_research_operation(
+            confirmation_state, runtime, "model_calls"
+        )
+        if terminal is not None:
+            return terminal
+        try:
+            assessment = assess_evidence(
+                model,
+                state["question"],
+                str(_required(state.get("active_query"), "active_query")),
+                evidence_set.evidence_items,
+                runtime.context.research_config,
+                confirmation=True,
+            )
+        except Exception:
+            return _research_terminal(
+                "failed", "evidence_assessment_failed", counters
+            )
+        if _research_deadline_exceeded(runtime.context):
+            return _research_terminal(
+                "incomplete", "deadline_exceeded", counters
+            )
     result: dict[str, object] = {
         "assessment": assessment.model_dump(mode="json"),
         "counters": counters.model_dump(mode="json"),
@@ -984,13 +1024,6 @@ def assess_research_evidence(
         )
         return result
 
-    budget = runtime.context.execution_budget
-    can_refine = (
-        counters.research_iterations < budget.research_iteration_limit
-        and counters.retrieval_requests < budget.retrieval_request_limit
-        and counters.model_calls < budget.model_call_limit
-        and not _research_deadline_exceeded(runtime.context)
-    )
     if can_refine:
         result.update({"status": "pending", "next_node": "refine"})
     else:

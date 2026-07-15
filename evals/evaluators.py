@@ -229,7 +229,11 @@ def _wrap_semantic_evaluator(
             return scorer(
                 inputs=questions,
                 outputs=answers,
-                reference_outputs=reference_data,
+                reference_outputs={
+                    "reference_answers": [
+                        turn.reference_answer for turn in reference.turns
+                    ]
+                },
             )
         if key == "retrieval_relevance":
             return scorer(
@@ -238,21 +242,25 @@ def _wrap_semantic_evaluator(
                 reference_outputs=reference_data,
             )
         if key == "forbidden_claim_absence":
-            forbidden_claims = [
-                claim.model_dump(mode="json")
-                for turn in reference.turns
-                for claim in turn.forbidden_claims
+            aligned_turns = [
+                {
+                    "assistant_message": answer,
+                    "forbidden_claims": [
+                        claim.model_dump(mode="json")
+                        for claim in expected.forbidden_claims
+                    ],
+                }
+                for answer, expected in zip(
+                    answers, reference.turns, strict=True
+                )
             ]
-            if not forbidden_claims:
+            if not any(turn["forbidden_claims"] for turn in aligned_turns):
                 return {
                     "key": key,
                     "score": True,
                     "comment": "no forbidden claims",
                 }
-            return scorer(
-                outputs={"assistant_messages": answers},
-                reference_outputs={"forbidden_claims": forbidden_claims},
-            )
+            return scorer(outputs={"turns": aligned_turns})
         return scorer(
             outputs=actual.model_dump(mode="json"),
             reference_outputs=reference_data,
@@ -291,11 +299,12 @@ clear, direct, and cover the reference answer.
 <reference_outputs>{reference_outputs}</reference_outputs>"""
 
 _FORBIDDEN_CLAIM_PROMPT = """Return true only when the actual assistant messages
-contain none of the listed forbidden claims or semantic equivalents. Inspect
-only assistant_messages. Citation markers such as [E1] are references, not
-claims, and must not be treated as forbidden disclosures.
-<outputs>{outputs}</outputs>
-<reference_outputs>{reference_outputs}</reference_outputs>"""
+contain none of the forbidden claims or semantic equivalents listed for the same
+Turn. Compare each assistant_message only with forbidden_claims in that Turn.
+A fact permitted in another Turn, or a contrast that attributes the fact to a
+different environment or subject, is not a violation. Citation markers such as
+[E1] are references, not claims.
+<outputs>{outputs}</outputs>"""
 
 _CITATION_ENTAILMENT_PROMPT = """Score from 0 to 1 whether every cited Evidence
 passage supports the claim associated with its citation. Use only the supplied

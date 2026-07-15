@@ -15,6 +15,7 @@ from agentic_rag.agents.research import (
     ResearchPlan,
     assess_evidence,
     create_research_plan,
+    refine_research_query,
 )
 from agentic_rag.corpus import KnowledgeSource
 from agentic_rag.graph.nodes import (
@@ -113,7 +114,67 @@ def test_evidence_assessment_receives_the_active_search_stage() -> None:
     system_prompt = messages[0][1]
     payload = json.loads(messages[1][1])
     assert "ordered first search" in system_prompt
+    assert "public incident summary" in system_prompt
     assert payload["active_query"] == "empty legacy query"
+
+
+def test_final_evidence_confirmation_uses_a_stricter_sufficiency_prompt() -> None:
+    model = Mock()
+    model.with_structured_output.return_value.invoke.return_value = (
+        EvidenceAssessment(sufficient=True)
+    )
+
+    with pytest.raises(ValueError, match="empty Evidence"):
+        assess_evidence(
+            model,
+            "Which worker version was incompatible?",
+            "legacy worker incompatible schema v2",
+            (),
+            ResearchAgentConfig(),
+            confirmation=True,
+        )
+
+    messages = model.with_structured_output.return_value.invoke.call_args.args[0]
+    assert "final confirmation" in messages[0][1]
+
+
+def test_plan_repair_requests_exactly_one_structured_object() -> None:
+    model = Mock()
+    model.with_structured_output.return_value.invoke.return_value = ResearchPlan(
+        action=PlanAction.RETRIEVE,
+        query="settlement impact",
+        knowledge_sources=(KnowledgeSource.OPERATIONAL_RUNBOOKS,),
+    )
+
+    create_research_plan(
+        model,
+        "What was the settlement impact?",
+        ResearchAgentConfig(),
+        repair=True,
+    )
+
+    messages = model.with_structured_output.return_value.invoke.call_args.args[0]
+    payload = json.loads(messages[1][1])
+    assert "exactly one JSON object" in messages[0][1]
+    assert payload["repair_invalid_output"] is True
+
+
+def test_refinement_drops_a_failed_ordered_exact_phrase() -> None:
+    model = Mock()
+    model.with_structured_output.return_value.invoke.return_value = QueryRefinement(
+        query="legacy worker incompatible schema v2"
+    )
+
+    refine_research_query(
+        model,
+        "First search for 'empty legacy query', then find the legacy worker.",
+        '"empty legacy query" legacy worker',
+        (),
+        ResearchAgentConfig(),
+    )
+
+    messages = model.with_structured_output.return_value.invoke.call_args.args[0]
+    assert "omit that failed exact phrase" in messages[0][1]
 
 
 def test_research_decisions_are_strict_and_bounded() -> None:

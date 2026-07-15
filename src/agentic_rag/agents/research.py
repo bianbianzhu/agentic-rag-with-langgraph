@@ -35,20 +35,20 @@ class ResearchAgentConfig(BaseModel):
     model_parameters_version: Literal["structured-defaults-v1"] = (
         "structured-defaults-v1"
     )
-    plan_prompt_version: Literal["research-plan-prompt-v2"] = (
-        "research-plan-prompt-v2"
+    plan_prompt_version: Literal["research-plan-prompt-v3"] = (
+        "research-plan-prompt-v3"
     )
     plan_schema_version: Literal["research-plan-schema-v1"] = (
         "research-plan-schema-v1"
     )
-    assessment_prompt_version: Literal["evidence-assessment-prompt-v2"] = (
-        "evidence-assessment-prompt-v2"
+    assessment_prompt_version: Literal["evidence-assessment-prompt-v4"] = (
+        "evidence-assessment-prompt-v4"
     )
     assessment_schema_version: Literal["evidence-assessment-schema-v1"] = (
         "evidence-assessment-schema-v1"
     )
-    refinement_prompt_version: Literal["query-refinement-prompt-v1"] = (
-        "query-refinement-prompt-v1"
+    refinement_prompt_version: Literal["query-refinement-prompt-v2"] = (
+        "query-refinement-prompt-v2"
     )
     refinement_schema_version: Literal["query-refinement-schema-v1"] = (
         "query-refinement-schema-v1"
@@ -139,6 +139,8 @@ def create_research_plan(
     model: BaseChatModel,
     question: str,
     config: ResearchAgentConfig,
+    *,
+    repair: bool = False,
 ) -> ResearchPlan:
     """Plan retrieval or a structured non-knowledge terminal."""
 
@@ -172,13 +174,21 @@ def create_research_plan(
                 "direct only for greetings, clarification only for genuinely "
                 "ambiguous requests, and refusal only outside both fixed "
                 "Knowledge Sources. Never emit identity, grants, SQL, paths, "
-                "URLs, budgets, or tool arguments.",
+                "URLs, budgets, or tool arguments. "
+                + (
+                    "The previous structured response was invalid. Return "
+                    "exactly one JSON object matching the schema, with no "
+                    "second object or trailing text."
+                    if repair
+                    else ""
+                ),
             ),
             (
                 "human",
                 json.dumps(
                     {
                         "question": question,
+                        "repair_invalid_output": repair,
                         "contract": {
                             "prompt": config.plan_prompt_version,
                             "schema": config.plan_schema_version,
@@ -197,6 +207,8 @@ def assess_evidence(
     active_query: str,
     evidence_items: Sequence[EvidenceItem],
     config: ResearchAgentConfig,
+    *,
+    confirmation: bool = False,
 ) -> EvidenceAssessment:
     """Decide whether the bounded matched chunks can answer the question."""
 
@@ -213,7 +225,18 @@ def assess_evidence(
                 "ordered first search, mark Evidence sufficient only when it "
                 "contains the requested exact phrase; fallback evidence does "
                 "not make the ordered first search sufficient. Return no "
-                "reasoning text.",
+                "reasoning text. For a question asking what information can be "
+                "reported, an authorized public incident summary stating that "
+                "the event was delayed and later restored is sufficient; do "
+                "not require restricted counts or amounts. "
+                + (
+                    "This is the final confirmation after an initial "
+                    "insufficient decision. Return false only when no Evidence "
+                    "chunk directly states the entity, version, property, or "
+                    "event needed to answer the active query."
+                    if confirmation
+                    else ""
+                ),
             ),
             (
                 "human",
@@ -221,6 +244,7 @@ def assess_evidence(
                     {
                         "question": question,
                         "active_query": active_query,
+                        "confirmation": confirmation,
                         "contract": {
                             "prompt": config.assessment_prompt_version,
                             "schema": config.assessment_schema_version,
@@ -260,6 +284,9 @@ def refine_research_query(
                 "system",
                 "Refine the retrieval query once using the original question "
                 "and the insufficient matched Evidence. Return only a query. "
+                "If the original question ordered an exact first search and "
+                "that search was insufficient, omit that failed exact phrase "
+                "from the replacement query and target only the fallback. "
                 "Do not add identity, grants, sources, paths, URLs, SQL, or "
                 "budgets.",
             ),

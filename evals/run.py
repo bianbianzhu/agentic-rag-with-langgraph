@@ -85,9 +85,9 @@ def build_experiment_metadata(
         "prompts": [
             "contextual-rewrite-prompt-v2",
             "conversation-summary-prompt-v1",
-            "research-plan-prompt-v2",
-            "evidence-assessment-prompt-v2",
-            "query-refinement-prompt-v1",
+            "research-plan-prompt-v3",
+            "evidence-assessment-prompt-v4",
+            "query-refinement-prompt-v2",
             "answer-generation-v2",
             "answer-verification-v1",
             "listwise-v2",

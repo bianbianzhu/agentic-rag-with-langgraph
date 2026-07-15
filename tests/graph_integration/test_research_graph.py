@@ -216,6 +216,30 @@ def test_research_graph_refines_once_then_succeeds(
     ]
 
 
+def test_research_graph_confirms_nonempty_final_evidence_once(
+    research_input: tuple[ResearchGraphState, RuntimeContext],
+) -> None:
+    state, base_context = research_input
+    model = DeterministicResearchModel(
+        responses=[
+            _plan("empty first query"),
+            EvidenceAssessment(sufficient=False),
+            QueryRefinement(query="rollback failure"),
+            EvidenceAssessment(sufficient=False),
+            EvidenceAssessment(sufficient=True),
+        ]
+    )
+
+    result = _invoke(state, base_context, model)
+
+    assert result["status"] == "evidence_ready"
+    assert result["counters"] == {
+        "model_calls": 7,
+        "retrieval_requests": 2,
+        "research_iterations": 1,
+    }
+
+
 def test_repeated_empty_retrieval_stops_at_research_budget(
     research_input: tuple[ResearchGraphState, RuntimeContext],
 ) -> None:
